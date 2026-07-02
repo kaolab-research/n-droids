@@ -205,8 +205,7 @@ with Robot() as robot:
                 obs = robot.step(policy(obs))
             if rec.rerecord:
                 robot.cancel_episode()
-                rec.clear()
-```
+            rec.clear()   # reset episode flags for next iteration
 
 Press **n** to end an episode, **r** to re‑record, **q** to stop. That's it.
 
