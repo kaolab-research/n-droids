@@ -192,7 +192,7 @@ Test totals unchanged: 141 passing (41 r2d2 + 100 c3po).
 
 ---
 
-### Phase 9: Camera Streaming Resolution ← PRIORITY
+### Phase 9: Camera Streaming Resolution ✅
 Ethernet by 2× (249 MB/s vs ~112 MB/s practical).  Some form of bandwidth
 reduction is required for multi-camera stations — it is not optional.
 
