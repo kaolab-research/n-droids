@@ -406,11 +406,23 @@ c3po's `ObservationBuffer.update_from_frame()` already reshapes using
 
 ---
 
-### Phase 10: Bug fixes & signal handling ← IN PROGRESS
+### Phase 10: Bug fixes & signal handling ✅
 
 **Goal**: Fix the four issues discovered during manual hardware testing.
 
-**Status**: Protocol tests written (StatusMessage), implementation in progress.
+**Status**: Implemented with 16 tests.  StatusMessage protocol added to both repos,
+r2d2 sends lifecycle events (recording_started/stopped, episode_finalized,
+watchdog_triggered, cycle_overrun), c3po ingests and logs them with optional
+on_status callback.  SIGTERM handler added for graceful shutdown with torque
+disable.  Health check noise suppressed.  Connect/disconnect logging added.
+
+Key bugs fixed during implementation:
+- DatasetRecorder camera_buffers now initialized in __init__ (was empty dict)
+- ResetEpisode captures frame_count before start_episode() resets it
+- StopRecording uses saved _recording_name (StopRecording has no .name field)
+- Cycle overrun rate limiter starts at time.monotonic() (was 0.0)
+- _disconnect_hardware is async with serial buffer flush
+- SIGTERM handled via loop.add_signal_handler (not just KeyboardInterrupt)
 
 #### Task 10.1: Protocol — add StatusMessage for server→client notifications (3 tests)
 
@@ -608,10 +620,10 @@ workflow improvements.
 | Phase 8 | 21 |
 | Robustness pass | — |
 | Phase 9 | 16 |
-| Phase 10 | 17 |
+| Phase 10 | 16 |
 | Phase 11 | 9 |
 | Phase 12 | 11 |
-| **Running total** | **223 (2 skipped)** |
+| **Running total** | **222 (2 skipped)** |
 
 ### Hardware proven
 
@@ -627,6 +639,8 @@ workflow improvements.
 | Stable device naming (by-path) | ✅ |
 | Configurable control rate | ✅ |
 | Streaming resolution cap | ✅ |
-| StatusMessage protocol | — |
-| Graceful SIGTERM shutdown | — |
+| StatusMessage protocol | ✅ |
+| Graceful SIGTERM shutdown | ✅ |
+| Connect/disconnect logging | ✅ |
+| Health check log suppression | ✅ |
 | Dataset HTTP transfer | — |
