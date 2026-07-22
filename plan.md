@@ -542,6 +542,43 @@ class SpecResponse:
 
 ---
 
+### Recent Robustness Fixes ✅
+
+**Camera failure resilience.**  When a USB camera disconnects mid-session,
+the control loop and teleop now continue unaffected:
+
+- `_NonBlockingCamera.read_latest()` added — delegates to `read()` so
+  `get_observation()` gets the same blank-frame fallback as the camera send
+  loop.  Previously a crashed OpenCV thread would raise `RuntimeError` on
+  every control cycle, locking the follower arm.
+- `get_observation()` error handler rate-limited to 1 log per 5 seconds;
+  sends `camera_error` StatusMessage to c3po.
+- Camera error status rate-limited to 1 per second per camera (was ~200/sec
+  from the 200Hz check loop).
+
+**Recording fixes.**  Several issues discovered during hardware testing:
+
+- `Recording.clear()` now increments `_episode_count` only for non-discarded
+  episodes (checks `rerecord` flag before clearing).  Discarded episodes
+  (`r` key) reuse the same episode number.
+- Keyboard `r` key now also sets `done = True` so the inner teleop loop
+  exits immediately (previously required also pressing `n`).
+- `CancelEpisode` sends `episode_discarded` StatusMessage so c3po logs
+  "Episode discarded — redo from start".
+- Watchdog timer reset on `ResetEpisode` so the user gets the full timeout
+  window to start the next teleop session.
+- `episode_ready` StatusMessage sent after episode finalization:
+  "Episode N ready — begin teleop".
+
+**Spec fixes.**  Runtime introspection improvements:
+
+- `robot.spec()` now drains stale Observations/BinaryFrames before
+  returning the `SpecResponse` (was returning the first queued message).
+- `SpecResponse.__str__()` replaced fixed-width box-drawing table with
+  plain text that adapts to any terminal width.
+
+---
+
 ### Phase 12: Dataset availability & forwarding
 
 **Goal**: Get datasets off the NUC and into the researcher's workflow with
@@ -643,4 +680,8 @@ workflow improvements.
 | Graceful SIGTERM shutdown | ✅ |
 | Connect/disconnect logging | ✅ |
 | Health check log suppression | ✅ |
+| Camera error resilience (graceful fallback + status) | ✅ |
+| Recording episode counter / discard / ready messages | ✅ |
+| Spec runtime introspection (`robot.spec()`) | ✅ |
+| Plain-text spec output (`str(spec)`) | ✅ |
 | Dataset HTTP transfer | — |
