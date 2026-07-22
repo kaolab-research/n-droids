@@ -406,198 +406,191 @@ c3po's `ObservationBuffer.update_from_frame()` already reshapes using
 
 ---
 
-### Phase 10: Franka
+### Phase 10: Bug fixes & signal handling ← IN PROGRESS
 
-**Goal**: Franka Panda arm support via libfranka.  Custom `FrankaRobot` class
-implementing LeRobot's `Robot` interface.  Same protocol, same c3po, same
-recording — only the robot layer changes.
+**Goal**: Fix the four issues discovered during manual hardware testing.
 
-### Phase 11: Kinova
+**Status**: Protocol tests written (StatusMessage), implementation in progress.
 
-**Goal**: Kinova Gen3 support via Kortex API.  Same pattern as Franka.
+#### Task 10.1: Protocol — add StatusMessage for server→client notifications (3 tests)
 
-### Phase 12: ZED Camera
+**Files**: ADAPT `c3po/src/c3po/_protocol.py`, ADAPT `r2d2/src/r2d2/_protocol.py`
 
-**Goal**: ZED camera support via ZED SDK.  RGB + depth streaming.  Requires
-GPU-equipped NUC for CUDA-accelerated depth computation.
+- Add a `StatusMessage` dataclass for asynchronous server→client updates:
+  ```python
+  @dataclass
+  class StatusMessage:
+      event: str        # "episode_finalized", "recording_started", "watchdog_triggered", ...
+      message: str      # human-readable description
+      data: dict[str, Any] = field(default_factory=dict)
+      type: str = field(default="status", init=False)
+  ```
+- Register in `_MESSAGE_REGISTRY`.
+- Events defined:
+  - `episode_finalized` — `end_episode()` completed (payload: `{episode_index, frame_count, duration_ms}`)
+  - `recording_started` — `start_recording` received (payload: `{dataset_name}`)
+  - `recording_stopped` — `stop_recording` received (payload: `{dataset_name, total_episodes, total_frames, size_bytes}`)
+  - `watchdog_triggered` — watchdog fired (payload: `{seconds_since_last_action}`)
+  - `cycle_overrun` — control cycle exceeded period (payload: `{elapsed_ms, period_ms}`)
+- **Tests**: encode/decode roundtrip, event string validation, optional data roundtrip.
+
+#### Task 10.2: r2d2 — send StatusMessage for key lifecycle events (5 tests)
+
+**Files**: ADAPT `r2d2/src/r2d2/_server.py`
+
+- `_recv_loop`: after `end_episode()` completes, send `StatusMessage(event="episode_finalized", ...)`
+- `_recv_loop`: on `start_recording` / `stop_recording`, send status messages
+- Control loop: after watchdog triggers, send `StatusMessage(event="watchdog_triggered", ...)`
+- Control loop: on cycle overrun, send `StatusMessage(event="cycle_overrun", ...)` (rate-limited to once per 10s)
+- **Tests**: status sent on episode finalization, status sent on recording start/stop,
+  status sent on watchdog trigger, cycle overrun status rate-limited,
+  status NOT sent when recording not active.
+
+#### Task 10.3: c3po — ingest and log StatusMessage (2 tests)
+
+**Files**: ADAPT `c3po/src/c3po/robot.py`
+
+- `_ingest()`: handle `StatusMessage` — log at appropriate level (info for lifecycle,
+  warning for watchdog, debug for overrun).
+- Expose a `on_status` callback property so the researcher can hook custom behavior:
+  ```python
+  robot.on_status = lambda event, message, data: print(f"[{event}] {message}")
+  ```
+- **Tests**: status logged at correct level, callback invoked when set.
+
+#### Task 10.4: r2d2 — fix torque-on-disconnect with proper SIGTERM handling (4 tests)
+
+**Files**: ADAPT `r2d2/src/r2d2/_server.py`
+
+- Make `_disconnect_hardware` async — add `await asyncio.sleep(0.1)` after
+  `robot.disconnect()` to let the serial buffer flush before the event loop closes.
+- Add explicit `SIGTERM` handler in `main()` using `loop.add_signal_handler()`
+  so Docker stops trigger graceful shutdown (not just `KeyboardInterrupt`).
+- Log "Shutting down — disabling motor torque" during disconnect.
+- **Tests**: `_disconnect_hardware` calls `robot.disconnect()`, async sleep after
+  disconnect, SIGTERM handler registered, disconnect logged.
+
+#### Task 10.5: r2d2 — suppress health check log spam + add connect/disconnect logs (2 tests)
+
+**Files**: ADAPT `r2d2/src/r2d2/_server.py`
+
+- Set `websockets` logger to WARNING level at server startup.
+- In `_handler`: log "c3po client connected" on successful describe handshake.
+- In `_handler` finally: log "c3po client disconnected".
+- **Tests**: health check probe does not produce ERROR log, connect message appears
+  after handshake, disconnect message appears on close.
+
+#### Task 10.6: c3po — better rate reporting in logs (1 test)
+
+**Files**: ADAPT `c3po/src/c3po/robot.py`
+
+- On `reset()`, log the station's configured and effective control rates from manifest.
+- Track `step()` call intervals and log a warning if the policy loop is slower
+  than the control rate (i.e., the researcher's policy is the bottleneck).
+- **Tests**: rate info logged on reset, slow-loop warning triggered.
 
 ---
 
-### Phase 13: Controller Architecture (powered leaders, boundary)
+### Phase 11: Status protocol & runtime introspection
 
-**Design rationale.**  The current architecture has two categories: `arms`
-(receive actions from c3po) and `controllers` (read-only, appear in
-observations).  ALOHA-style powered leader arms blur this line — they produce
-joint positions AND receive haptic feedback / execute reset motions — but
-**the researcher never directly commands a leader arm.**  The leader either
-moves passively (pushed by the human) or actively (haptics / reset computed
-by r2d2 server-side).  Therefore:
+**Goal**: Full-duplex status channel + `spec` request/response for live debugging.
 
-- **No new protocol category is needed.**  Powered leaders remain in the
-  existing `controllers` bucket.  Their state streams to c3po in observations;
-  any commands they receive are generated within r2d2, not sent over the
-  WebSocket.
-- **The protocol's `Action` message targets only `arms`** (followers).  The
-  researcher commands the follower; the leader follows physics.
+#### Task 11.1: Protocol — add SpecRequest / SpecResponse (3 tests)
 
-**Controller boundary — NUC vs. researcher's machine.**  The dividing line is
-**physical coupling to the robot station**:
+**Files**: ADAPT both `_protocol.py` files
 
-| Controller | Location | Rationale |
-|---|---|---|
-| Leader arms (powered or unpowered) | **NUC** | Physically coupled to workcell; needs calibration; part of station config |
-| Joysticks, gamepads, SpaceMouse | **Researcher's machine** | Generic HID peripherals; researcher brings their own; reads in policy code with `pygame` / `pynput` / `spacymouse` |
-| Keyboard (q/n/r) | **Researcher's machine** | Already handled by c3po's `KeyboardListener` as a small convenience; no additional scope |
+```python
+@dataclass
+class SpecRequest:
+    type: str = field(default="spec_request", init=False)
 
-**c3po does not become a general controller library.**  The `KeyboardListener`
-stays as the only built-in controller convenience.  For joysticks, gamepads,
-and SpaceMouse, the researcher imports whatever library they prefer directly
-in their policy script — c3po has no opinion and no dependency on HID libraries.
+@dataclass
+class SpecResponse:
+    effective_control_rate: float
+    uptime_seconds: float
+    cameras: list[dict[str, Any]]
+    recording: dict[str, Any] | None
+    watchdog_trigger_count: int
+    type: str = field(default="spec_response", init=False)
+```
 
-#### Task 13.1: Manifest — add `capabilities` to controllers (3 tests)
+#### Task 11.2: r2d2 — serve spec requests with live metrics (4 tests)
 
-**Files**: ADAPT `r2d2/src/r2d2/_manifest.py`, ADAPT `c3po/src/c3po/_manifest.py`
+- Track per-camera frame send count and drop count.
+- Track effective control rate (rolling average over last 100 cycles).
+- Respond to `SpecRequest` with current metrics.
+- **Tests**: spec includes camera stats, spec includes recording state,
+  effective rate is measured, uptime increments.
 
-- Add an optional `capabilities: list[str]` field to each controller entry
-  in the manifest:
-  ```json
-  {
-    "name": "left_leader",
-    "type": "joint_position",
-    "joint_count": 6,
-    "capabilities": ["haptic_feedback", "auto_reset"]
-  }
-  ```
-- Supported capability values:
-  - `"haptic_feedback"` — controller can receive force/torque feedback from r2d2
-  - `"auto_reset"` — controller can move to a home position on initialization
-  - Absence of `capabilities` (or an empty list) means a passive sensor-only
-    controller (e.g., unpowered SO-101 leader).
-- r2d2's `build_manifest()`: include `capabilities` from the station config's
-  teleop section when present, default to `[]`.
-- c3po's `parse_manifest()`: expose `capabilities` on the parsed controller
-  entries so `Robot` can provide a `controller_capabilities` property.
-- **Tests**: manifest roundtrip with capabilities, missing capabilities
-  defaults to empty list, unknown capability value does not break parsing.
+#### Task 11.3: c3po — Robot.spec() convenience method (2 tests)
 
-#### Task 13.2: Station config — add teleop capabilities (2 tests)
+- `robot.spec()` sends `SpecRequest`, returns parsed `SpecResponse`.
+- Expose as a property-like method for one-shot debugging.
+- **Tests**: spec returns expected keys, spec works mid-session.
 
-**Files**: ADAPT `r2d2/src/r2d2/_config.py`
+---
 
-- Add an optional `capabilities` list to the `teleop` section in station YAML:
-  ```yaml
-  teleop:
-    type: so_leader
-    id: my_leader_arm
-    port: /dev/serial/by-path/...
-    baudrate: 1000000
-    capabilities: []  # passive leader (default)
-  ```
-  ```yaml
-  teleop:
-    type: aloha_leader
-    id: left_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-  ```
-- `StationConfig` dataclass: add `teleop_capabilities: list[str]` field,
-  default `[]`.
-- `load_station_config()`: parse `capabilities` from the teleop section.
-- **Tests**: config with capabilities parses correctly, missing capabilities
-  defaults to empty, unknown capability warns but does not error.
+### Phase 12: Dataset availability & forwarding
 
-#### Task 13.3: r2d2 — haptic feedback loop (4 tests)
+**Goal**: Get datasets off the NUC and into the researcher's workflow with
+zero friction.
+
+#### Task 12.1: DatasetReady notification (2 tests)
+
+**Files**: ADAPT `r2d2/src/r2d2/_server.py`, ADAPT `c3po/src/c3po/robot.py`
+
+- After `stop_recording` → `finalize()`, r2d2 sends `StatusMessage`
+  with `event="dataset_ready"` and payload `{name, path, num_episodes, total_frames, size_bytes}`.
+- c3po logs this prominently and exposes `last_dataset_info` property.
+- **Tests**: notification sent after recording stop, c3po property populated.
+
+#### Task 12.2: HTTP file server for pull-based transfer (3 tests)
 
 **Files**: ADAPT `r2d2/src/r2d2/_server.py`
 
-- In hardware-mode control loop, **after** reading `get_observation()` (which
-  includes motor currents for Feetech / libfranka / Kortex arms), compute
-  haptic feedback torques and send them to the teleop if it supports it.
-- Add a `_send_haptic_feedback(teleop, le_obs, joint_names)` helper:
-  - Extract motor currents/efforts from `le_obs`.
-  - Map to joint torques using a simple proportional gain (configurable,
-    default `0.05`).  Exact mapping is hardware-specific — start with a
-    generic interface that each teleop backend can override.
-  - Call `teleop.send_feedback(torques)` if the teleop exposes that method.
-- The haptic loop runs at the control rate (every cycle).  It must be fast
-  (sub-millisecond) — no I/O, just arithmetic + a serial write if the motor
-  bus supports it.
-- Guard with `"haptic_feedback" in teleop_capabilities` — passive leaders
-  skip this entirely.
-- **Tests**: haptic loop skipped when capability absent, feedback computed
-  from mock observations, feedback not sent when teleop lacks `send_feedback`,
-  proportional gain is configurable.
+- r2d2 runs a lightweight HTTP file server on port 9091 serving `/datasets`.
+- Read-only, directory listing enabled, no auth (trusted network).
+- c3po's `Robot` exposes `dataset_url` property (`"http://10.42.0.1:9091/datasets/session_001/"`).
+- Researcher can `wget -r` or `rsync` from the URL.
+- **Tests**: HTTP server serves directory listing, parquet file is downloadable,
+  server stops cleanly on shutdown.
 
-#### Task 13.4: r2d2 — auto-reset on connect (5 tests)
+#### Task 12.3: HuggingFace Hub upload backend (3 tests, manual integration)
 
-**Files**: ADAPT `r2d2/src/r2d2/_server.py`
+**Files**: NEW `r2d2/src/r2d2/_upload.py`
 
-- After the `describe` handshake completes in `_handler`, if the teleop
-  supports `"auto_reset"`, execute an initialization sequence:
-  1. Send the leader to a configured home position (joint-space waypoints).
-  2. Wait for the leader to reach each waypoint (position error < threshold).
-  3. Once at home, release any active torque and hand control to the human.
-- The home position is read from the station config (new `home_position`
-  field in the teleop section) or from a calibration file.  If neither
-  exists, skip auto-reset and log a warning.
-- The reset sequence runs **after** the `describe_response` is sent but
-  **before** the control loop starts streaming observations.  This way c3po's
-  `reset()` call receives observations from a leader already at its home
-  position.
-- Add a `leader_home_position` property to `Robot` so the researcher can
-  introspect where the leader will reset to.
-- **Tests**: auto-reset skips when capability absent, home position read
-  from config, reset sequence runs to completion, timeout if leader fails
-  to reach home, observations stream only after reset completes.
-
-#### Task 13.5: c3po — expose controller capabilities (2 tests)
-
-**Files**: ADAPT `c3po/src/c3po/robot.py`, ADAPT `c3po/src/c3po/_manifest.py`
-
-- Add a `controller_capabilities` property to `Robot`:
-  ```python
-  @property
-  def controller_capabilities(self) -> dict[str, list[str]]:
-      """Mapping from controller name to its capabilities list."""
-      return {c["name"]: c.get("capabilities", []) for c in self._manifest["controllers"]}
-  ```
-- Add a `leader_home_position` property that returns the home position from
-  the manifest (if present), or `None`.
-- These are informational — the researcher's code can check them but the
-  protocol does not change.
-- **Tests**: property returns correct capabilities, empty dict for stations
-  with no controllers, home position is None when not configured.
-
-#### Task 13.6: Station config — ALOHA-style powered leader example (1 test)
-
-**Files**: NEW `r2d2/config/station.aloha.yaml`
-
-- Create a reference config for an ALOHA-style bimanual station:
+- Background asyncio task that uploads the dataset directory to HF Hub
+  using `huggingface_hub` (already a dependency via LeRobot).
+- Auth via `HF_TOKEN` environment variable.
+- Configurable in station YAML:
   ```yaml
-  station_model: aloha_bimanual
-
-  robot:
-    type: so_follower
-    # ... left follower config ...
-
-  robot_right:
-    type: so_follower
-    # ... right follower config ...
-
-  teleop_left:
-    type: aloha_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-    home_position: [0.0, -0.5, 0.3, 0.0, 0.0, 0.0]
-
-  teleop_right:
-    type: aloha_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-    home_position: [0.0, 0.5, -0.3, 0.0, 0.0, 0.0]
+  upload:
+    hf_hub:
+      repo_id: "my-lab/so101-datasets"
+      private: true
   ```
-- **Test**: config loads without error, capabilities and home position
-  parsed correctly.
+- Status messages report upload progress.
+- **Tests**: upload task created, HF token read from env, failure logged gracefully.
+
+#### Task 12.4: Dropbox upload backend (3 tests, manual integration)
+
+**Files**: ADAPT `r2d2/src/r2d2/_upload.py`
+
+- Same pattern as HF Hub.  Auth via `DROPBOX_TOKEN` environment variable.
+- Configurable in station YAML under `upload.dropbox`.
+- **Tests**: same pattern as HF tests.
+
+---
+
+### Deferred Phases
+
+These are valuable but postponed in favor of robustness, logging, and dataset
+workflow improvements.
+
+- **Franka** (was Phase 10): Panda arm via libfranka.
+- **Kinova** (was Phase 11): Gen3 via Kortex API.
+- **ZED Camera** (was Phase 12): ZED SDK support.
+- **Controller Architecture** (was Phase 13): Powered leaders, haptic feedback, auto-reset.
 
 ---
 
@@ -612,10 +605,13 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 | Phase 5 | 17 |
 | Phase 6 | 5 |
 | Phase 7 | 12 |
-| Phase 8 | 21 (+ 4 existing buffer tests adapted) |
-| Phase 9 | 17 |
-| Phase 13 | 17 |
-| **Running total** | **221 (2 skipped)** |
+| Phase 8 | 21 |
+| Robustness pass | — |
+| Phase 9 | 16 |
+| Phase 10 | 17 |
+| Phase 11 | 9 |
+| Phase 12 | 11 |
+| **Running total** | **223 (2 skipped)** |
 
 ### Hardware proven
 
@@ -630,3 +626,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 | Dataset recording (parquet + MP4) | ✅ |
 | Stable device naming (by-path) | ✅ |
 | Configurable control rate | ✅ |
+| Streaming resolution cap | ✅ |
+| StatusMessage protocol | — |
+| Graceful SIGTERM shutdown | — |
+| Dataset HTTP transfer | — |
