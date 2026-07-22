@@ -503,7 +503,7 @@ Key bugs fixed during implementation:
 
 ---
 
-### Phase 11: Status protocol & runtime introspection
+### Phase 11: Status protocol & runtime introspection ✅
 
 **Goal**: Full-duplex status channel + `spec` request/response for live debugging.
 
@@ -621,9 +621,9 @@ workflow improvements.
 | Robustness pass | — |
 | Phase 9 | 16 |
 | Phase 10 | 16 |
-| Phase 11 | 9 |
+| Phase 11 | 13 |
 | Phase 12 | 11 |
-| **Running total** | **222 (2 skipped)** |
+| **Running total** | **235 (2 skipped)** |
 
 ### Hardware proven
 
