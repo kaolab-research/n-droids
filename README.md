@@ -182,6 +182,7 @@ c3po includes a built‑in keyboard listener that captures **q** (quit / stop re
 ```bash
 docker run -d --restart=unless-stopped \
   -p 9090:9090 \
+  -p 9091:9091 \
   --device=/dev/ttyACM0:/dev/ttyACM0 \
   --device=/dev/video0:/dev/video0 \
   -v /opt/r2d2/station.yaml:/config/station.yaml \
