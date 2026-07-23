@@ -579,7 +579,7 @@ the control loop and teleop now continue unaffected:
 
 ---
 
-### Phase 12: Dataset forwarding over Ethernet
+### Phase 12: Dataset forwarding over Ethernet ✅
 
 **Goal**: Get datasets off the NUC and onto the inference machine with zero
 friction, using the existing Ethernet link.  No cloud services, no auth tokens.
@@ -587,7 +587,7 @@ friction, using the existing Ethernet link.  No cloud services, no auth tokens.
 HTTP is the right mechanism: simplest possible server (Python stdlib), no
 extra dependencies, point-to-point trusted link.
 
-#### Task 12.1: r2d2 — HTTP file server on port 9091 (3 tests)
+#### Task 12.1: r2d2 — HTTP file server on port 9091 (3 tests) ✅
 
 **Files**: ADAPT `r2d2/src/r2d2/_server.py`
 
@@ -600,7 +600,7 @@ extra dependencies, point-to-point trusted link.
 - **Tests**: server starts on port 9091, directory listing shows dataset
   directories, parquet file is downloadable via HTTP GET.
 
-#### Task 12.2: r2d2 — DatasetReady notification with URL (2 tests)
+#### Task 12.2: r2d2 — DatasetReady notification with URL (2 tests) ✅
 
 **Files**: ADAPT `r2d2/src/r2d2/_server.py`
 
@@ -614,7 +614,7 @@ extra dependencies, point-to-point trusted link.
       "episodes": 5,
       "frames": 1250,
       "size_bytes": 220200960,
-      "url": "http://10.42.0.1:9091/datasets/session_001/"
+      "url": "http://10.42.0.1:9091/session_001/"
     }
   }
   ```
@@ -622,7 +622,7 @@ extra dependencies, point-to-point trusted link.
 - **Tests**: status sent after stop_recording, URL is correct, size is
   non-zero for non-empty datasets.
 
-#### Task 12.3: c3po — Robot.download_dataset() convenience method (2 tests)
+#### Task 12.3: c3po — Robot.download_dataset() convenience method (5 tests) ✅
 
 **Files**: ADAPT `c3po/src/c3po/robot.py`
 
@@ -660,8 +660,8 @@ covers the immediate need.  Will be implemented when tokens are available.
 | Phase 9 | 16 |
 | Phase 10 | 16 |
 | Phase 11 | 13 |
-| Phase 12 | 7 |
-| **Running total** | **242 (2 skipped)** |
+| Phase 12 | 12 |
+| **Running total** | **247 (2 skipped)** |
 
 ### Hardware proven
 
@@ -685,4 +685,5 @@ covers the immediate need.  Will be implemented when tokens are available.
 | Recording episode counter / discard / ready messages | ✅ |
 | Spec runtime introspection (`robot.spec()`) | ✅ |
 | Plain-text spec output (`str(spec)`) | ✅ |
-| Dataset HTTP transfer | — |
+| Dataset HTTP transfer | ✅ |
+| Dataset download (`robot.download_dataset()`) | ✅ |
