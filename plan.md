@@ -579,67 +579,68 @@ the control loop and teleop now continue unaffected:
 
 ---
 
-### Phase 12: Dataset availability & forwarding
+### Phase 12: Dataset forwarding over Ethernet
 
-**Goal**: Get datasets off the NUC and into the researcher's workflow with
-zero friction.
+**Goal**: Get datasets off the NUC and onto the inference machine with zero
+friction, using the existing Ethernet link.  No cloud services, no auth tokens.
 
-#### Task 12.1: DatasetReady notification (2 tests)
+HTTP is the right mechanism: simplest possible server (Python stdlib), no
+extra dependencies, point-to-point trusted link.
 
-**Files**: ADAPT `r2d2/src/r2d2/_server.py`, ADAPT `c3po/src/c3po/robot.py`
-
-- After `stop_recording` → `finalize()`, r2d2 sends `StatusMessage`
-  with `event="dataset_ready"` and payload `{name, path, num_episodes, total_frames, size_bytes}`.
-- c3po logs this prominently and exposes `last_dataset_info` property.
-- **Tests**: notification sent after recording stop, c3po property populated.
-
-#### Task 12.2: HTTP file server for pull-based transfer (3 tests)
+#### Task 12.1: r2d2 — HTTP file server on port 9091 (3 tests)
 
 **Files**: ADAPT `r2d2/src/r2d2/_server.py`
 
-- r2d2 runs a lightweight HTTP file server on port 9091 serving `/datasets`.
-- Read-only, directory listing enabled, no auth (trusted network).
-- c3po's `Robot` exposes `dataset_url` property (`"http://10.42.0.1:9091/datasets/session_001/"`).
-- Researcher can `wget -r` or `rsync` from the URL.
-- **Tests**: HTTP server serves directory listing, parquet file is downloadable,
-  server stops cleanly on shutdown.
+- Start a background `http.server.HTTPServer` on port 9091 serving `/datasets`.
+  Read-only, directory listing enabled, binds `0.0.0.0` (accessible from the
+  inference machine at `http://10.42.0.1:9091/datasets/`).
+- Runs in a daemon thread alongside the WebSocket server — no asyncio
+  integration needed for a simple file server.
+- Stops cleanly when the main server shuts down.
+- **Tests**: server starts on port 9091, directory listing shows dataset
+  directories, parquet file is downloadable via HTTP GET.
 
-#### Task 12.3: HuggingFace Hub upload backend (3 tests, manual integration)
+#### Task 12.2: r2d2 — DatasetReady notification with URL (2 tests)
 
-**Files**: NEW `r2d2/src/r2d2/_upload.py`
+**Files**: ADAPT `r2d2/src/r2d2/_server.py`
 
-- Background asyncio task that uploads the dataset directory to HF Hub
-  using `huggingface_hub` (already a dependency via LeRobot).
-- Auth via `HF_TOKEN` environment variable.
-- Configurable in station YAML:
-  ```yaml
-  upload:
-    hf_hub:
-      repo_id: "my-lab/so101-datasets"
-      private: true
+- After `stop_recording` → `finalize()`, send a `dataset_ready` StatusMessage:
+  ```json
+  {
+    "event": "dataset_ready",
+    "message": "session_001 ready (5 episodes, 210 MB)",
+    "data": {
+      "name": "session_001",
+      "episodes": 5,
+      "frames": 1250,
+      "size_bytes": 220200960,
+      "url": "http://10.42.0.1:9091/datasets/session_001/"
+    }
+  }
   ```
-- Status messages report upload progress.
-- **Tests**: upload task created, HF token read from env, failure logged gracefully.
+- Compute dataset size with `du` or by walking the directory tree.
+- **Tests**: status sent after stop_recording, URL is correct, size is
+  non-zero for non-empty datasets.
 
-#### Task 12.4: Dropbox upload backend (3 tests, manual integration)
+#### Task 12.3: c3po — Robot.download_dataset() convenience method (2 tests)
 
-**Files**: ADAPT `r2d2/src/r2d2/_upload.py`
+**Files**: ADAPT `c3po/src/c3po/robot.py`
 
-- Same pattern as HF Hub.  Auth via `DROPBOX_TOKEN` environment variable.
-- Configurable in station YAML under `upload.dropbox`.
-- **Tests**: same pattern as HF tests.
+- `robot.download_dataset(name, dest=".")` downloads the dataset from
+  `http://10.42.0.1:9091/datasets/{name}/` to `dest/{name}/`.
+- Uses `requests` (already available as a transitive dependency via
+  `websocket-client`).
+- Shows a progress bar via `tqdm` if available.
+- **Tests**: download succeeds for small test dataset, files are written
+  to correct destination.
 
 ---
 
 ### Deferred Phases
 
-These are valuable but postponed in favor of robustness, logging, and dataset
-workflow improvements.
-
-- **Franka** (was Phase 10): Panda arm via libfranka.
-- **Kinova** (was Phase 11): Gen3 via Kortex API.
-- **ZED Camera** (was Phase 12): ZED SDK support.
-- **Controller Architecture** (was Phase 13): Powered leaders, haptic feedback, auto-reset.
+**Deferred**: HuggingFace Hub and Dropbox upload backends.  These require
+auth tokens (HF_TOKEN, DROPBOX_TOKEN) and the existing HTTP forwarding
+covers the immediate need.  Will be implemented when tokens are available.
 
 ---
 
@@ -659,8 +660,8 @@ workflow improvements.
 | Phase 9 | 16 |
 | Phase 10 | 16 |
 | Phase 11 | 13 |
-| Phase 12 | 11 |
-| **Running total** | **235 (2 skipped)** |
+| Phase 12 | 7 |
+| **Running total** | **242 (2 skipped)** |
 
 ### Hardware proven
 
