@@ -644,6 +644,496 @@ covers the immediate need.  Will be implemented when tokens are available.
 
 ---
 
+### Phase 14: Controller Architecture (powered leaders, haptic feedback, auto-reset)
+
+**Design rationale.**  The current architecture has two categories: ``arms``
+(receive actions from c3po) and ``controllers`` (read-only, appear in
+observations).  ALOHA-style powered leader arms blur this line — they produce
+joint positions AND receive haptic feedback / execute reset motions — but
+**the researcher never directly commands a leader arm.**  The leader either
+moves passively (pushed by the human) or actively (haptics / reset computed
+by r2d2 server-side).  Therefore:
+
+- **No new protocol category is needed.**  Powered leaders remain in the
+  existing ``controllers`` bucket.  Their state streams to c3po in observations;
+  any commands they receive are generated within r2d2, not sent over the
+  WebSocket.
+- **The protocol's ``Action`` message targets only ``arms``** (followers).  The
+  researcher commands the follower; the leader follows physics.
+
+**Controller boundary — NUC vs. researcher's machine.**  The dividing line is
+**physical coupling to the robot station**:
+
+| Controller | Location | Rationale |
+|---|---|---|
+| Leader arms (powered or unpowered) | **NUC** | Physically coupled to workcell; needs calibration; part of station config |
+| Joysticks, gamepads, SpaceMouse | **Researcher's machine** | Generic HID peripherals; researcher brings their own; reads in policy code with ``pygame`` / ``pynput`` / ``spacymouse`` |
+| Keyboard (q/n/r) | **Researcher's machine** | Already handled by c3po's ``KeyboardListener`` as a small convenience; no additional scope |
+
+**c3po does not become a general controller library.**  The ``KeyboardListener``
+stays as the only built-in controller convenience.  For joysticks, gamepads,
+and SpaceMouse, the researcher imports whatever library they prefer directly
+in their policy script — c3po has no opinion and no dependency on HID libraries.
+
+#### Task 14.1: Manifest — add ``capabilities`` to controllers (3 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_manifest.py``, ADAPT ``c3po/src/c3po/_manifest.py``
+
+- Add an optional ``capabilities: list[str]`` field to each controller entry
+  in the manifest:
+  ```json
+  {
+    "name": "left_leader",
+    "type": "joint_position",
+    "joint_count": 6,
+    "capabilities": ["haptic_feedback", "auto_reset"]
+  }
+  ```
+- Supported capability values:
+  - ``"haptic_feedback"`` — controller can receive force/torque feedback from r2d2
+  - ``"auto_reset"`` — controller can move to a home position on initialization
+  - Absence of ``capabilities`` (or an empty list) means a passive sensor-only
+    controller (e.g., unpowered SO-101 leader).
+- r2d2's ``build_manifest()``: include ``capabilities`` from the station config's
+  teleop section when present, default to ``[]``.
+- c3po's ``parse_manifest()``: expose ``capabilities`` on the parsed controller
+  entries so ``Robot`` can provide a ``controller_capabilities`` property.
+- **Tests**: manifest roundtrip with capabilities, missing capabilities
+  defaults to empty list, unknown capability value does not break parsing.
+
+#### Task 14.2: Station config — add teleop capabilities (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
+
+- Add an optional ``capabilities`` list to the ``teleop`` section in station YAML:
+  ```yaml
+  teleop:
+    type: so_leader
+    id: my_leader_arm
+    port: /dev/serial/by-path/...
+    baudrate: 1000000
+    capabilities: []  # passive leader (default)
+  ```
+  ```yaml
+  teleop:
+    type: aloha_leader
+    id: left_leader
+    port: /dev/serial/by-path/...
+    capabilities: [haptic_feedback, auto_reset]
+  ```
+- ``StationConfig`` dataclass: add ``teleop_capabilities: list[str]`` field,
+  default ``[]``.
+- ``load_station_config()``: parse ``capabilities`` from the teleop section.
+- **Tests**: config with capabilities parses correctly, missing capabilities
+  defaults to empty, unknown capability warns but does not error.
+
+#### Task 14.3: r2d2 — haptic feedback loop (4 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
+
+- In hardware-mode control loop, **after** reading ``get_observation()`` (which
+  includes motor currents for Feetech / libfranka / Kortex arms), compute
+  haptic feedback torques and send them to the teleop if it supports it.
+- Add a ``_send_haptic_feedback(teleop, le_obs, joint_names)`` helper:
+  - Extract motor currents/efforts from ``le_obs``.
+  - Map to joint torques using a simple proportional gain (configurable,
+    default ``0.05``).  Exact mapping is hardware-specific — start with a
+    generic interface that each teleop backend can override.
+  - Call ``teleop.send_feedback(torques)`` if the teleop exposes that method.
+- The haptic loop runs at the control rate (every cycle).  It must be fast
+  (sub-millisecond) — no I/O, just arithmetic + a serial write if the motor
+  bus supports it.
+- Guard with ``"haptic_feedback" in teleop_capabilities`` — passive leaders
+  skip this entirely.
+- **Tests**: haptic loop skipped when capability absent, feedback computed
+  from mock observations, feedback not sent when teleop lacks ``send_feedback``,
+  proportional gain is configurable.
+
+#### Task 14.4: r2d2 — auto-reset on connect (5 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
+
+- After the ``describe`` handshake completes, if the teleop supports
+  ``"auto_reset"``, execute an initialization sequence:
+  1. Send the leader to a configured home position (joint-space waypoints).
+  2. Wait for the leader to reach each waypoint (position error < threshold).
+  3. Once at home, release any active torque and hand control to the human.
+- The home position is read from the station config (new ``home_position``
+  field in the teleop section) or from a calibration file.  If neither
+  exists, skip auto-reset and log a warning.
+- The reset sequence runs **after** the ``describe_response`` is sent but
+  **before** the control loop starts streaming observations.  This way c3po's
+  ``reset()`` call receives observations from a leader already at its home
+  position.
+- Add a ``leader_home_position`` property to ``Robot`` so the researcher can
+  introspect where the leader will reset to.
+- **Tests**: auto-reset skips when capability absent, home position read
+  from config, reset sequence runs to completion, timeout if leader fails
+  to reach home, observations stream only after reset completes.
+
+#### Task 14.5: c3po — expose controller capabilities (2 tests)
+
+**Files**: ADAPT ``c3po/src/c3po/robot.py``, ADAPT ``c3po/src/c3po/_manifest.py``
+
+- Add a ``controller_capabilities`` property to ``Robot``:
+  ```python
+  @property
+  def controller_capabilities(self) -> dict[str, list[str]]:
+      """Mapping from controller name to its capabilities list."""
+      return {
+          c["name"]: c.get("capabilities", [])
+          for c in self._manifest["controllers"]
+      }
+  ```
+- Add a ``leader_home_position`` property that returns the home position from
+  the manifest (if present), or ``None``.
+- These are informational — the researcher's code can check them but the
+  protocol does not change.
+- **Tests**: property returns correct capabilities, empty dict for stations
+  with no controllers, home position is None when not configured.
+
+#### Task 14.6: Station config — ALOHA-style powered leader example (1 test)
+
+**Files**: NEW ``r2d2/config/station.aloha.yaml``
+
+- Create a reference config for an ALOHA-style bimanual station:
+  ```yaml
+  station_model: aloha_bimanual
+
+  robot:
+    type: so_follower
+    # ... left follower config ...
+
+  robot_right:
+    type: so_follower
+    # ... right follower config ...
+
+  teleop_left:
+    type: aloha_leader
+    port: /dev/serial/by-path/...
+    capabilities: [haptic_feedback, auto_reset]
+    home_position: [0.0, -0.5, 0.3, 0.0, 0.0, 0.0]
+
+  teleop_right:
+    type: aloha_leader
+    port: /dev/serial/by-path/...
+    capabilities: [haptic_feedback, auto_reset]
+    home_position: [0.0, 0.5, -0.3, 0.0, 0.0, 0.0]
+  ```
+- **Test**: config loads without error, capabilities and home position
+  parsed correctly.
+
+---
+
+### Phase 15: Lightweight LeRobot v3.0 Dataset Parser (c3po)
+
+**Goal**: Let researchers read LeRobot v3.0 datasets (parquet + MP4) without
+installing the full ``lerobot`` package — which pulls PyTorch, HuggingFace Hub,
+and training dependencies.  This directly supports the project's core value
+prop: minimal dependencies on the researcher's machine.
+
+**Design**.  A new ``c3po.data`` submodule (or a standalone ``c3po-datasets``
+entry point) that reads the on-disk format produced by r2d2's
+``DatasetRecorder``.  Dependencies: ``pyarrow`` (already a c3po dependency),
+``av`` or ``opencv-python-headless`` for MP4 decoding.
+
+API sketch:
+
+```python
+from c3po.data import open_dataset
+
+with open_dataset("session_001") as ds:
+    print(ds.info)         # info.json contents
+    print(ds.stats)        # stats.json contents
+    for episode in ds.episodes():
+        for frame in episode:
+            obs = frame["observation.state"]  # np.ndarray
+            act = frame["action"]             # np.ndarray
+            img = frame["observation.images.front_rgb"]  # np.ndarray (H, W, 3)
+```
+
+The parser is read-only and does not depend on LeRobot's type system or
+``LeRobotDataset`` class.  It should produce plain dicts of numpy arrays
+that are trivially convertible to PyTorch tensors if needed.
+
+#### Task 15.1: Episode reader — parquet + video (5 tests)
+
+**Files**: NEW ``c3po/src/c3po/data/__init__.py``, ``c3po/src/c3po/data/_reader.py``
+
+- ``EpisodeReader`` class: opens a chunk directory, reads parquet files in
+  episode order, decodes MP4 videos lazily.
+- Index episodes by number without loading all data into memory.
+- Handle depth frames stored as PNG sequences (produced by r2d2 when MP4
+  encoding is not applicable to uint16 data).
+- **Tests**: read single-episode dataset, read multi-episode dataset, video
+  frame count matches parquet frame count, depth PNG sequence decoded
+  correctly, missing video directory handled gracefully.
+
+#### Task 15.2: Dataset metadata — info.json + stats.json (2 tests)
+
+**Files**: ADAPT ``c3po/src/c3po/data/_reader.py``
+
+- Parse ``meta/info.json`` and ``meta/stats.json`` into typed dicts.
+- Expose ``fps``, ``robot_type``, ``total_episodes``, ``total_frames``.
+- Expose per-feature statistics (min, max, mean, std) from ``stats.json``.
+- **Tests**: info fields match recorded values, stats contain all expected
+  features, gracefully handles missing stats.json.
+
+#### Task 15.3: Public API — ``open_dataset`` context manager (2 tests)
+
+**Files**: ADAPT ``c3po/src/c3po/data/__init__.py``
+
+- ``open_dataset(path)`` returns a ``Dataset`` object with properties:
+  ``info``, ``stats``, ``episodes()`` iterator, ``__len__()`` (episode count).
+- ``Dataset.episodes()`` returns an iterator of ``Episode`` objects.
+- ``Episode`` exposes a ``frames()`` iterator and ``__len__()`` (frame count).
+- Each frame is a dict with string keys and numpy array values.
+- **Tests**: context manager opens and closes cleanly, iteration works,
+  frame dict has expected keys, len reports correct counts.
+
+---
+
+### Phase 16: Franka Panda Support (r2d2)
+
+**Goal**: Support the Franka Panda robot arm using libfranka, following the
+same pattern established for SO-101.  The design is already documented in
+``r2d2/README.md`` §4 "Adding a New Robot" with a complete ``FrankaRobot``
+class skeleton.
+
+**Key design decision**: r2d2 communicates with the Franka control box over
+Ethernet.  The control box runs its own real-time controller; r2d2 is a
+setpoint relay — no PREEMPT_RT kernel required on the NUC.  The arm's
+internal safety reflexes remain fully active.
+
+#### Task 16.1: Register Franka config in r2d2 (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
+
+- Add a ``FrankaRobotConfig`` dataclass and register it as ``"franka"`` in
+  ``_ROBOT_REGISTRY``.
+- Minimal fields: ``ip`` (control box IP, default ``172.16.0.2``), camera
+  configs.
+- Import ``franka`` lazily — only when a Franka config is loaded.
+- **Tests**: config parses with IP field, missing IP raises clear error.
+
+#### Task 16.2: FrankaRobot driver (4 tests)
+
+**Files**: NEW ``r2d2/src/r2d2/_robots/franka.py``
+
+- Implement ``FrankaRobot`` following the LeRobot ``Robot`` interface:
+  ``connect()``, ``get_observation()``, ``send_action()``, ``disconnect()``.
+- ``connect(calibrate=True)``: instantiate ``franka.Robot``, set default
+  behavior (collision reflexes, joint limits).
+- ``get_observation()``: read joint positions + velocities from
+  ``robot.read_once()``.  Camera frames are returned by LeRobot's camera
+  layer (not Franka-specific).
+- ``send_action(action)``: call ``robot.set_joint_positions()`` with the
+  flattened position array.
+- ``disconnect()``: close the Franka connection, disconnect cameras.
+- **Tests**: mock libfranka for unit tests, observation dict has expected
+  keys, send_action passes through to mock, disconnect is idempotent.
+
+#### Task 16.3: Station config + launch script (1 test)
+
+**Files**: NEW ``r2d2/config/station.franka.yaml``, NEW
+``r2d2/launch_scripts/franka.sh``
+
+- YAML config referencing the Franka control box IP and camera configs.
+- Launch script bind-mounting cameras and the config file.
+- **Test**: config loads without error.
+
+---
+
+### Phase 17: Stereolabs ZED Camera Support (r2d2)
+
+**Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
+capture.  The ZED is already listed in the supported hardware table.
+
+**Key design decision**: The ZED SDK must be installed in the Docker image.
+The existing binary frame protocol already supports RGB + depth streams
+natively (``RAW_RGB`` + ``RAW_DEPTH`` encodings) — no protocol changes needed.
+The ``_NonBlockingCamera`` wrapper handles the LeRobot/OpenCV camera interface;
+a ZED camera would need a similar adapter that reads from the ZED SDK's
+background capture thread.
+
+#### Task 17.1: ZedCamera wrapper (3 tests)
+
+**Files**: NEW ``r2d2/src/r2d2/_cameras/zed.py``
+
+- Implement a ``ZedCamera`` class that wraps the ZED SDK:
+  - ``__init__``: open the camera by serial number, configure resolution +
+    FPS, start the ZED SDK's internal capture thread.
+  - ``read()``: return the latest RGB frame as a numpy array (non-blocking).
+  - ``read_depth()``: return the latest depth map as a numpy uint16 array.
+  - ``close()``: stop capture and release the camera.
+- The ZED SDK's ``retrieve_image()`` / ``retrieve_measure()`` calls are
+  already non-blocking when using the SDK's internal grabbing thread.
+- **Tests**: mock ZED SDK for unit tests, read returns correct shape,
+  read_depth returns uint16, close is idempotent.
+
+#### Task 17.2: Register ZED in camera registry (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
+
+- Add ``"zed"`` to ``_CAMERA_REGISTRY`` with a ``ZedCameraConfig`` dataclass.
+- Fields: ``serial`` (serial number string), ``width``, ``height``, ``fps``,
+  ``publish_depth`` (bool).
+- Import ZED SDK lazily.
+- **Tests**: config parses with serial, missing serial raises clear error,
+  publish_depth defaults to False.
+
+#### Task 17.3: Station config + launch script (1 test)
+
+**Files**: NEW ``r2d2/config/station.so101.zed.yaml`` or similar.
+
+- Reference config using a ZED as the wrist camera.
+- Launch script bind-mounting the ZED USB device.
+- **Test**: config loads without error.
+
+---
+
+### Phase 18: c3po Live View (optional)
+
+**Goal**: A lightweight popup window showing live camera feeds and joint
+torque plots during teleop data collection.  Helps the operator see what the
+robot sees without needing a separate monitor or VNC session.
+
+**Key design decision**: This is an **optional extra**, not part of c3po core.
+It lives in a separate ``c3po.viewer`` submodule (or a standalone
+``c3po-live`` entry point) with extra dependencies (``opencv-python-headless``
+or ``matplotlib``).  c3po's core dependency footprint stays at 3.
+
+#### Task 18.1: Camera feed window (2 tests)
+
+**Files**: NEW ``c3po/src/c3po/viewer/__init__.py``
+
+- ``LiveViewer(robot)``: opens a persistent OpenCV window showing the latest
+  frame from each camera, updated on every ``step()`` call.
+- Multiple cameras are tiled in a grid layout (e.g., 2 cameras → side by side).
+- Press ``q`` or close the window to stop the viewer (does not affect the
+  robot connection).
+- **Tests**: window opens without error (headless test with mocked OpenCV),
+  multiple camera feeds are tiled correctly.
+
+#### Task 18.2: Joint torque / position plot (1 test)
+
+**Files**: ADAPT ``c3po/src/c3po/viewer/__init__.py``
+
+- A rolling matplotlib plot (or a simple terminal ASCII plot) of joint
+  torques and positions over the last N seconds.
+- Auto-scaling y-axis, color-coded per joint.
+- Updates once per episode or on a configurable interval.
+- **Test**: plot data accumulates correctly over multiple steps, data
+  clears on reset.
+
+---
+
+### Phase 19: BOX Dataset Upload (r2d2)
+
+**Goal**: After recording, r2d2 automatically uploads the finalized dataset
+to the lab's BOX account (infinite storage via the advisor's account), then
+deletes the local copy to free up space on the NUC.  The upload runs in the
+background — the researcher can disconnect and walk away immediately after
+pressing ``q``.  No upload logic on c3po.
+
+**Key design decisions**:
+
+- **Upload on r2d2, not c3po.**  The dataset already lives on the NUC;
+  uploading directly avoids a download-then-upload round-trip.  A single
+  BOX API token (shared lab credential) lives on the NUC — no token
+  distribution to individual researchers.
+- **Fire-and-forget.**  The upload runs in the same background asyncio task
+  that handles ``end_episode()`` + ``finalize()`` (see Phase 10 fix).  The
+  researcher can disconnect immediately; the upload continues.
+- **Auto-cleanup.**  On successful upload, r2d2 deletes the local dataset
+  directory.  The NUC is a control computer, not a storage server — disk
+  space is reclaimed automatically.
+- **Fallback.**  If upload fails, the local copy is preserved and the
+  researcher can still download it via HTTP (Phase 12).
+- **Zero new dependencies.**  Uses Python stdlib ``urllib`` for the BOX API.
+  BOX's chunked upload is standard HTTP (session create → PUT parts → commit).
+
+#### Task 19.1: BOX upload client (4 tests)
+
+**Files**: NEW ``r2d2/src/r2d2/_box_upload.py``
+
+- ``upload_dataset_to_box(dataset_path, box_token, folder_name=None)``:
+  recursively uploads a directory tree to BOX, preserving structure.
+- Authentication: ``Authorization: Bearer {token}`` header on every request.
+- Small files (< 50 MB): single ``POST /files/content`` with multipart.
+- Large files (>= 50 MB): BOX chunked upload session API:
+  1. ``POST /files/upload_sessions`` — create session (folder_id, file_size, file_name)
+  2. ``PUT /files/upload_sessions/{id}/parts`` — upload each chunk with
+     ``Content-Range`` and ``Digest`` (SHA-1) headers in parallel
+  3. ``POST /files/upload_sessions/{id}/commit`` — finalize, returns file metadata
+- Returns the BOX shared link URL on success.
+- Raises ``BoxUploadError`` with a clear message on failure (auth, network,
+  quota, etc.).
+- **Tests**: mock HTTP responses with ``unittest.mock.patch`` on
+  ``urllib.request``, small file upload constructs correct multipart body,
+  chunked upload splits file correctly, commit returns expected URL,
+  auth failure raises BoxUploadError, network error retries once.
+
+#### Task 19.2: r2d2 — wire upload into StopRecording flow (3 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
+
+- Extend the ``_finalize_dataset`` background task (spawned in the
+  ``StopRecording`` handler) with an optional upload step:
+  ```python
+  async def _finalize_dataset() -> None:
+      # ... existing end_episode + finalize + status sends ...
+
+      # Auto-upload to BOX if configured.
+      if _box_token is not None:
+          logger.info("Uploading %r to BOX ...", name)
+          try:
+              url = await rec_loop.run_in_executor(
+                  None,
+                  lambda: upload_dataset_to_box(
+                      _path, _box_token, folder_name="n-droids"
+                  ),
+              )
+              logger.info("Uploaded %r to BOX: %s", name, url)
+              # Delete local copy to free NUC disk space.
+              await rec_loop.run_in_executor(None, shutil.rmtree, _path)
+              logger.info("Deleted local dataset %r", name)
+              await self._send_status(
+                  "dataset_uploaded",
+                  f"{name} uploaded to BOX",
+                  name=name,
+                  url=url,
+              )
+          except Exception:
+              logger.exception(
+                  "BOX upload failed for %r — dataset preserved locally",
+                  name,
+              )
+  ```
+- The ``_box_token`` is captured from the server configuration at handler
+  creation time (see Task 19.3).
+- The upload runs in a thread-pool executor to avoid blocking the event loop.
+- ``shutil.rmtree`` also runs in the executor since it's a potentially slow
+  filesystem operation on large directory trees.
+- **Tests**: upload skipped when token is None, upload called with correct
+  path and folder, local dataset deleted after successful upload, local
+  dataset preserved on upload failure, ``dataset_uploaded`` StatusMessage
+  sent on success.
+
+#### Task 19.3: Server config — BOX token from environment (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
+
+- ``create_server()`` reads ``BOX_TOKEN`` from the environment.
+- Pass the token (or ``None``) through to ``_ConnectionHandler`` so the
+  background task can access it.
+- Add a ``--box-token`` CLI flag to ``main()`` as an alternative to the
+  env var (useful for Docker secrets).
+- **Tests**: token read from env var, token passed through to handler,
+  None when not configured.
+
+---
+
 ### Test totals
 
 | Phase | c3po | r2d2 |
@@ -726,7 +1216,6 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
 - Verify leader-follower teleoperation with c3po.
 - Record a short dataset and verify it loads with LeRobot's training tools.
 
-### Deferred Phases
 ### Hardware proven
 
 | Feature | Status |
