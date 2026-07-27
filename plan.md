@@ -766,80 +766,19 @@ NEW ``r2d2/launch_scripts/rebot_bimanual_3realsense.sh``
   action‑from‑protocol, teleop position extraction, missing joint default.
 - **Edge cases** (3 tests): mixed prefixes, arm with only cameras, 7 joints per arm.
 
-#### Task 14.6: USB path documentation ✅
+#### Task 14.6: USB path documentation + teleop scripts ✅
 
-**Files**: NEW ``n-droids/usb_setup.md``
+**Files**: NEW ``n-droids/usb_setup.md``, NEW ``toy-so101/teleop_rebot.py``,
+NEW ``toy-so101/record_rebot.py``, NEW ``toy-so101/replay_rebot.py``
 
 - Step‑by‑step guide for identifying CAN adapter, leader UART adapters, and
   RealSense serial numbers on the NUC.
-- Covers ``/dev/serial/by-path/``, ``/dev/serial/by-id/``, ``rs-enumerate-devices``.
-- Troubleshooting table for common errors.
-
-**Goal**: Support the ReBot B601-DM bimanual robot station using LeRobot's
-existing ``RebotB601Follower`` driver.  Follow the same pattern established
-for SO-101: register the config class, create a station YAML, write a launch
-script, and validate end-to-end.
-
-Because ReBot is bimanual, this phase also stress-tests the protocol's
-multi-arm support (already designed into the manifest, mapping layer, and
-protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
-
-#### Task 14.1: Register ReBot config in r2d2
-
-**Files**: ``r2d2/src/r2d2/_config.py``
-
-- Import ``RebotB601FollowerRobotConfig`` from LeRobot and register it
-  as ``"rebot_b601"`` in ``_ROBOT_REGISTRY``.
-- The ReBot robot object exposes two arms; LeRobot's ``get_observation()``
-  already returns keys with a prefix (e.g. ``"left/j0.pos"``).  Verify that
-  ``obs_to_protocol`` handles this with the correct ``arm_prefix``.
-
-#### Task 14.2: Station config for ReBot
-
-**Files**: NEW ``r2d2/config/station.rebot_b601.yaml``
-
-- Create a YAML config following the existing pattern with:
-  - ``station_model: rebot_b601``
-  - ``robot.type: rebot_b601``
-  - CAN bus port (e.g. ``/dev/pcan32`` or socketcan interface)
-  - Camera configs for wrist and scene cameras
-  - No teleop section (ReBot teleop uses the leader arms on the same robot)
-
-#### Task 14.3: Launch script
-
-**Files**: NEW ``r2d2/launch_scripts/rebot_b601.sh``
-
-- Docker run command following the existing pattern.
-- Bind-mount CAN bus device and cameras.
-- Expose ports 9090 (WebSocket) and 9091 (HTTP).
-
-#### Task 14.4: Manifest and mapping validation
-
-**Files**: ADAPT ``r2d2/src/r2d2/_manifest.py`` (if needed)
-
-- Verify that ``build_manifest`` correctly produces two arms when the
-  robot reports multiple joint name sets.
-- If LeRobot's ReBot driver uses a different observation key convention
-  than SO-101 (e.g. ``left_follower/j0.pos`` vs ``shoulder_pan.pos``),
-  add a mapping adapter in ``_mapping.py``.  Reuse existing code — do not
-  write a second mapping path.
-
-#### Task 14.5: Integration test (toy mode first)
-
-**Files**: ADAPT ``r2d2/tests/test_integration.py``
-
-- Add a test that creates a bimanual manifest (two arms, multiple cameras)
-  and verifies the full lifecycle: handshake → step → record → verify
-  parquet has both arms' state.
-- Reuse the existing ``MOCK_MANIFEST_BIMANUAL`` from c3po's tests as a
-  starting point.
-
-#### Task 14.6: Hardware validation (manual)
-
-- Connect to a physical ReBot station over CAN bus.
-- Verify leader-follower teleoperation with c3po.
-- Record a short dataset and verify it loads with LeRobot's training tools.
-
+- ``teleop_rebot.py``: live leader→follower mirroring with auto-discovered
+  arm-controller mapping.
+- ``record_rebot.py``: bimanual dataset recording with keyboard controls
+  (same q/n/r interface as the SO‑101 record script).
+- ``replay_rebot.py``: replay a downloaded dataset on the hardware, splitting
+  the flat action vector back into per-arm arrays.
 
 ---
 
@@ -1383,3 +1322,4 @@ pressing ``q``.  No upload logic on c3po.
 | Dataset HTTP transfer | ✅ |
 | Dataset download (`robot.download_dataset()`) | ✅ |
 | ReBot B601-DM config + launch scripts | ✅ (manifest + mapping proven in tests) |
+| ReBot bimanual leader-follower teleop | ✅ (hardware-verified) |

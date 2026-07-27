@@ -227,10 +227,11 @@ Press **n** to end an episode, **r** to re‑record, **q** to stop. That's it.
 | Intel RealSense | USB        | LeRobot `RealSenseCamera`    | ✓     |
 | Stereolabs ZED  | USB        | Custom `ZedCamera` (ZED SDK) | ✓     |
 
-| Controller         | Connection | Backend                 |
-| ------------------ | ---------- | ----------------------- |
-| SO‑101 leader arm  | USB‑serial | LeRobot `SOLeader`      |
-| Gamepad / keyboard | USB HID    | LeRobot teleop backends |
+| Controller              | Connection   | Backend                          |
+| ----------------------- | ------------ | -------------------------------- |
+| SO‑101 leader arm       | USB‑serial   | LeRobot `SOLeader`               |
+| ReBot Arm 102 leader    | USB‑UART     | LeRobot `RebotArm102Leader`      |
+| Gamepad / keyboard      | USB HID      | LeRobot teleop backends          |
 
 ---
 
