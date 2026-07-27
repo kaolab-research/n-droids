@@ -634,6 +634,75 @@ extra dependencies, point-to-point trusted link.
 - **Tests**: download succeeds for small test dataset, files are written
   to correct destination.
 
+
+### Phase 13: ReBot B601-DM Support
+
+**Goal**: Support the ReBot B601-DM bimanual robot station using LeRobot's
+existing ``RebotB601Follower`` driver.  Follow the same pattern established
+for SO-101: register the config class, create a station YAML, write a launch
+script, and validate end-to-end.
+
+Because ReBot is bimanual, this phase also stress-tests the protocol's
+multi-arm support (already designed into the manifest, mapping layer, and
+protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
+
+#### Task 13.1: Register ReBot config in r2d2
+
+**Files**: ``r2d2/src/r2d2/_config.py``
+
+- Import ``RebotB601FollowerRobotConfig`` from LeRobot and register it
+  as ``"rebot_b601"`` in ``_ROBOT_REGISTRY``.
+- The ReBot robot object exposes two arms; LeRobot's ``get_observation()``
+  already returns keys with a prefix (e.g. ``"left/j0.pos"``).  Verify that
+  ``obs_to_protocol`` handles this with the correct ``arm_prefix``.
+
+#### Task 13.2: Station config for ReBot
+
+**Files**: NEW ``r2d2/config/station.rebot_b601.yaml``
+
+- Create a YAML config following the existing pattern with:
+  - ``station_model: rebot_b601``
+  - ``robot.type: rebot_b601``
+  - CAN bus port (e.g. ``/dev/pcan32`` or socketcan interface)
+  - Camera configs for wrist and scene cameras
+  - No teleop section (ReBot teleop uses the leader arms on the same robot)
+
+#### Task 13.3: Launch script
+
+**Files**: NEW ``r2d2/launch_scripts/rebot_b601.sh``
+
+- Docker run command following the existing pattern.
+- Bind-mount CAN bus device and cameras.
+- Expose ports 9090 (WebSocket) and 9091 (HTTP).
+
+#### Task 13.4: Manifest and mapping validation
+
+**Files**: ADAPT ``r2d2/src/r2d2/_manifest.py`` (if needed)
+
+- Verify that ``build_manifest`` correctly produces two arms when the
+  robot reports multiple joint name sets.
+- If LeRobot's ReBot driver uses a different observation key convention
+  than SO-101 (e.g. ``left_follower/j0.pos`` vs ``shoulder_pan.pos``),
+  add a mapping adapter in ``_mapping.py``.  Reuse existing code — do not
+  write a second mapping path.
+
+#### Task 13.5: Integration test (toy mode first)
+
+**Files**: ADAPT ``r2d2/tests/test_integration.py``
+
+- Add a test that creates a bimanual manifest (two arms, multiple cameras)
+  and verifies the full lifecycle: handshake → step → record → verify
+  parquet has both arms' state.
+- Reuse the existing ``MOCK_MANIFEST_BIMANUAL`` from c3po's tests as a
+  starting point.
+
+#### Task 13.6: Hardware validation (manual)
+
+- Connect to a physical ReBot station over CAN bus.
+- Verify leader-follower teleoperation with c3po.
+- Record a short dataset and verify it loads with LeRobot's training tools.
+
+
 ---
 
 ### Deferred Phases
@@ -1148,73 +1217,6 @@ pressing ``q``.  No upload logic on c3po.
 | **Running total** | **134 (2 skipped)** | **79 (1 failure, 1 skipped)** |
 
 ---
-
-### Phase 13: ReBot B601-DM Support
-
-**Goal**: Support the ReBot B601-DM bimanual robot station using LeRobot's
-existing ``RebotB601Follower`` driver.  Follow the same pattern established
-for SO-101: register the config class, create a station YAML, write a launch
-script, and validate end-to-end.
-
-Because ReBot is bimanual, this phase also stress-tests the protocol's
-multi-arm support (already designed into the manifest, mapping layer, and
-protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
-
-#### Task 13.1: Register ReBot config in r2d2
-
-**Files**: ``r2d2/src/r2d2/_config.py``
-
-- Import ``RebotB601FollowerRobotConfig`` from LeRobot and register it
-  as ``"rebot_b601"`` in ``_ROBOT_REGISTRY``.
-- The ReBot robot object exposes two arms; LeRobot's ``get_observation()``
-  already returns keys with a prefix (e.g. ``"left/j0.pos"``).  Verify that
-  ``obs_to_protocol`` handles this with the correct ``arm_prefix``.
-
-#### Task 13.2: Station config for ReBot
-
-**Files**: NEW ``r2d2/config/station.rebot_b601.yaml``
-
-- Create a YAML config following the existing pattern with:
-  - ``station_model: rebot_b601``
-  - ``robot.type: rebot_b601``
-  - CAN bus port (e.g. ``/dev/pcan32`` or socketcan interface)
-  - Camera configs for wrist and scene cameras
-  - No teleop section (ReBot teleop uses the leader arms on the same robot)
-
-#### Task 13.3: Launch script
-
-**Files**: NEW ``r2d2/launch_scripts/rebot_b601.sh``
-
-- Docker run command following the existing pattern.
-- Bind-mount CAN bus device and cameras.
-- Expose ports 9090 (WebSocket) and 9091 (HTTP).
-
-#### Task 13.4: Manifest and mapping validation
-
-**Files**: ADAPT ``r2d2/src/r2d2/_manifest.py`` (if needed)
-
-- Verify that ``build_manifest`` correctly produces two arms when the
-  robot reports multiple joint name sets.
-- If LeRobot's ReBot driver uses a different observation key convention
-  than SO-101 (e.g. ``left_follower/j0.pos`` vs ``shoulder_pan.pos``),
-  add a mapping adapter in ``_mapping.py``.  Reuse existing code — do not
-  write a second mapping path.
-
-#### Task 13.5: Integration test (toy mode first)
-
-**Files**: ADAPT ``r2d2/tests/test_integration.py``
-
-- Add a test that creates a bimanual manifest (two arms, multiple cameras)
-  and verifies the full lifecycle: handshake → step → record → verify
-  parquet has both arms' state.
-- Reuse the existing ``MOCK_MANIFEST_BIMANUAL`` from c3po's tests as a
-  starting point.
-
-#### Task 13.6: Hardware validation (manual)
-
-- Connect to a physical ReBot station over CAN bus.
-- Verify leader-follower teleoperation with c3po.
-- Record a short dataset and verify it loads with LeRobot's training tools.
 
 ### Hardware proven
 
