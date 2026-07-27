@@ -219,7 +219,7 @@ Press **n** to end an episode, **r** to re‑record, **q** to stop. That's it.
 | SO‑101 (Feetech STS3215) | USB‑serial              | LeRobot `SOFollower`              | ✓       |
 | Franka Panda             | Ethernet to control box | Custom `FrankaRobot` (libfranka)  | planned |
 | Kinova Gen3              | Ethernet                | Custom `KinovaRobot` (Kortex API) | planned |
-| ReBot B601‑DM            | CAN bus                 | LeRobot `RebotB601Follower`       | planned |
+| ReBot B601‑DM            | CAN bus                 | LeRobot `RebotB601Follower` (native in v0.6.0) | planned |
 
 | Camera          | Connection | Backend                      | Depth |
 | --------------- | ---------- | ---------------------------- | ----- |

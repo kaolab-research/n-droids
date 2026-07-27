@@ -634,8 +634,59 @@ extra dependencies, point-to-point trusted link.
 - **Tests**: download succeeds for small test dataset, files are written
   to correct destination.
 
+---
 
-### Phase 13: ReBot B601-DM Support
+### Phase 13: LeRobot v0.6.0 Bump ✅
+
+**Goal**: Bump the vendored LeRobot source in r2d2 from v0.5.1 to v0.6.0.
+v0.6.0 adds native ReBot support (enabling Phase 14), fixes Feetech position
+overflow bugs, standardizes bimanual robot patterns, and splits dependencies
+into finer-grained extras.
+
+**Key finding**: ``torch`` remains a core dependency (not moved to an extra),
+so the ``types-no-torch.patch`` is still required — regenerated against the
+new ``types.py`` line offsets.
+
+Import paths for ``SOFollowerRobotConfig``, ``SOLeaderTeleopConfig``,
+``OpenCVCameraConfig``, ``make_robot_from_config``, and
+``make_teleoperator_from_config`` are all **unchanged**.  The bump is mostly
+a tag change in the Dockerfile.
+
+#### Task 13.1: Regenerate torch-optional patch ✅
+
+**Files**: ``r2d2/patches/types-no-torch.patch``
+
+- Regenerated the patch against v0.6.0's ``types.py``.  Same logic, updated
+  line offsets (v0.6.0 added ``from __future__ import annotations`` shifting
+  everything by 1 line; the ``try/except`` block adds 4 more).
+- Verified hunk headers match the new file's line numbers.
+
+#### Task 13.2: Update r2d2 Dockerfile ✅
+
+**Files**: ``r2d2/Dockerfile``
+
+- Changed ``git clone --branch v0.5.1`` → ``git clone --branch v0.6.0``.
+- No new pip packages needed: hardware-only code path does not import
+  ``gymnasium``, ``einops``, ``safetensors``, or other training deps.
+  Existing package list is sufficient.
+
+#### Task 13.3: Register ReBot config in r2d2 ✅
+
+**Files**: ``r2d2/src/r2d2/_config.py``
+
+- Added ``RebotB601FollowerRobotConfig`` import and ``_ROBOT_REGISTRY["rebot_b601"]``
+  entry.  Since v0.6.0 natively supports ReBot, this is just a registry entry —
+  no custom driver needed.  LeRobot's ``make_robot_from_config`` handles the rest.
+
+#### Task 13.4: Verify test suite ✅
+
+- ``test_config.py`` uses ``pytest.importorskip("lerobot")`` — safely skipped
+  when lerobot is not importable.  No test changes needed.
+- Full r2d2 test suite (79 tests) and c3po test suite (132 tests) pass.
+
+---
+
+### Phase 14: ReBot B601-DM Support
 
 **Goal**: Support the ReBot B601-DM bimanual robot station using LeRobot's
 existing ``RebotB601Follower`` driver.  Follow the same pattern established
@@ -646,7 +697,7 @@ Because ReBot is bimanual, this phase also stress-tests the protocol's
 multi-arm support (already designed into the manifest, mapping layer, and
 protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
 
-#### Task 13.1: Register ReBot config in r2d2
+#### Task 14.1: Register ReBot config in r2d2
 
 **Files**: ``r2d2/src/r2d2/_config.py``
 
@@ -656,7 +707,7 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
   already returns keys with a prefix (e.g. ``"left/j0.pos"``).  Verify that
   ``obs_to_protocol`` handles this with the correct ``arm_prefix``.
 
-#### Task 13.2: Station config for ReBot
+#### Task 14.2: Station config for ReBot
 
 **Files**: NEW ``r2d2/config/station.rebot_b601.yaml``
 
@@ -667,7 +718,7 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
   - Camera configs for wrist and scene cameras
   - No teleop section (ReBot teleop uses the leader arms on the same robot)
 
-#### Task 13.3: Launch script
+#### Task 14.3: Launch script
 
 **Files**: NEW ``r2d2/launch_scripts/rebot_b601.sh``
 
@@ -675,7 +726,7 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
 - Bind-mount CAN bus device and cameras.
 - Expose ports 9090 (WebSocket) and 9091 (HTTP).
 
-#### Task 13.4: Manifest and mapping validation
+#### Task 14.4: Manifest and mapping validation
 
 **Files**: ADAPT ``r2d2/src/r2d2/_manifest.py`` (if needed)
 
@@ -686,7 +737,7 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
   add a mapping adapter in ``_mapping.py``.  Reuse existing code — do not
   write a second mapping path.
 
-#### Task 13.5: Integration test (toy mode first)
+#### Task 14.5: Integration test (toy mode first)
 
 **Files**: ADAPT ``r2d2/tests/test_integration.py``
 
@@ -696,7 +747,7 @@ protocol spec — see ``MOCK_MANIFEST_BIMANUAL`` in c3po's test conftest).
 - Reuse the existing ``MOCK_MANIFEST_BIMANUAL`` from c3po's tests as a
   starting point.
 
-#### Task 13.6: Hardware validation (manual)
+#### Task 14.6: Hardware validation (manual)
 
 - Connect to a physical ReBot station over CAN bus.
 - Verify leader-follower teleoperation with c3po.
@@ -713,7 +764,7 @@ covers the immediate need.  Will be implemented when tokens are available.
 
 ---
 
-### Phase 14: Controller Architecture (powered leaders, haptic feedback, auto-reset)
+### Phase 15: Controller Architecture (powered leaders, haptic feedback, auto-reset)
 
 **Design rationale.**  The current architecture has two categories: ``arms``
 (receive actions from c3po) and ``controllers`` (read-only, appear in
@@ -744,7 +795,7 @@ stays as the only built-in controller convenience.  For joysticks, gamepads,
 and SpaceMouse, the researcher imports whatever library they prefer directly
 in their policy script — c3po has no opinion and no dependency on HID libraries.
 
-#### Task 14.1: Manifest — add ``capabilities`` to controllers (3 tests)
+#### Task 15.1: Manifest — add ``capabilities`` to controllers (3 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_manifest.py``, ADAPT ``c3po/src/c3po/_manifest.py``
 
@@ -770,7 +821,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 - **Tests**: manifest roundtrip with capabilities, missing capabilities
   defaults to empty list, unknown capability value does not break parsing.
 
-#### Task 14.2: Station config — add teleop capabilities (2 tests)
+#### Task 15.2: Station config — add teleop capabilities (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_config.py``
 
@@ -796,7 +847,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 - **Tests**: config with capabilities parses correctly, missing capabilities
   defaults to empty, unknown capability warns but does not error.
 
-#### Task 14.3: r2d2 — haptic feedback loop (4 tests)
+#### Task 15.3: r2d2 — haptic feedback loop (4 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
@@ -818,7 +869,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
   from mock observations, feedback not sent when teleop lacks ``send_feedback``,
   proportional gain is configurable.
 
-#### Task 14.4: r2d2 — auto-reset on connect (5 tests)
+#### Task 15.4: r2d2 — auto-reset on connect (5 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
@@ -840,7 +891,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
   from config, reset sequence runs to completion, timeout if leader fails
   to reach home, observations stream only after reset completes.
 
-#### Task 14.5: c3po — expose controller capabilities (2 tests)
+#### Task 15.5: c3po — expose controller capabilities (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/robot.py``, ADAPT ``c3po/src/c3po/_manifest.py``
 
@@ -861,7 +912,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 - **Tests**: property returns correct capabilities, empty dict for stations
   with no controllers, home position is None when not configured.
 
-#### Task 14.6: Station config — ALOHA-style powered leader example (1 test)
+#### Task 15.6: Station config — ALOHA-style powered leader example (1 test)
 
 **Files**: NEW ``r2d2/config/station.aloha.yaml``
 
@@ -894,7 +945,7 @@ in their policy script — c3po has no opinion and no dependency on HID librarie
 
 ---
 
-### Phase 15: Lightweight LeRobot v3.0 Dataset Parser (c3po)
+### Phase 16: Lightweight LeRobot v3.0 Dataset Parser (c3po)
 
 **Goal**: Let researchers read LeRobot v3.0 datasets (parquet + MP4) without
 installing the full ``lerobot`` package — which pulls PyTorch, HuggingFace Hub,
@@ -925,7 +976,7 @@ The parser is read-only and does not depend on LeRobot's type system or
 ``LeRobotDataset`` class.  It should produce plain dicts of numpy arrays
 that are trivially convertible to PyTorch tensors if needed.
 
-#### Task 15.1: Episode reader — parquet + video (5 tests)
+#### Task 16.1: Episode reader — parquet + video (5 tests)
 
 **Files**: NEW ``c3po/src/c3po/data/__init__.py``, ``c3po/src/c3po/data/_reader.py``
 
@@ -938,7 +989,7 @@ that are trivially convertible to PyTorch tensors if needed.
   frame count matches parquet frame count, depth PNG sequence decoded
   correctly, missing video directory handled gracefully.
 
-#### Task 15.2: Dataset metadata — info.json + stats.json (2 tests)
+#### Task 16.2: Dataset metadata — info.json + stats.json (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/_reader.py``
 
@@ -948,7 +999,7 @@ that are trivially convertible to PyTorch tensors if needed.
 - **Tests**: info fields match recorded values, stats contain all expected
   features, gracefully handles missing stats.json.
 
-#### Task 15.3: Public API — ``open_dataset`` context manager (2 tests)
+#### Task 16.3: Public API — ``open_dataset`` context manager (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/__init__.py``
 
@@ -962,7 +1013,7 @@ that are trivially convertible to PyTorch tensors if needed.
 
 ---
 
-### Phase 16: Franka Panda Support (r2d2)
+### Phase 17: Franka Panda Support (r2d2)
 
 **Goal**: Support the Franka Panda robot arm using libfranka, following the
 same pattern established for SO-101.  The design is already documented in
@@ -974,7 +1025,7 @@ Ethernet.  The control box runs its own real-time controller; r2d2 is a
 setpoint relay — no PREEMPT_RT kernel required on the NUC.  The arm's
 internal safety reflexes remain fully active.
 
-#### Task 16.1: Register Franka config in r2d2 (2 tests)
+#### Task 17.1: Register Franka config in r2d2 (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_config.py``
 
@@ -985,7 +1036,7 @@ internal safety reflexes remain fully active.
 - Import ``franka`` lazily — only when a Franka config is loaded.
 - **Tests**: config parses with IP field, missing IP raises clear error.
 
-#### Task 16.2: FrankaRobot driver (4 tests)
+#### Task 17.2: FrankaRobot driver (4 tests)
 
 **Files**: NEW ``r2d2/src/r2d2/_robots/franka.py``
 
@@ -1002,7 +1053,7 @@ internal safety reflexes remain fully active.
 - **Tests**: mock libfranka for unit tests, observation dict has expected
   keys, send_action passes through to mock, disconnect is idempotent.
 
-#### Task 16.3: Station config + launch script (1 test)
+#### Task 17.3: Station config + launch script (1 test)
 
 **Files**: NEW ``r2d2/config/station.franka.yaml``, NEW
 ``r2d2/launch_scripts/franka.sh``
@@ -1013,7 +1064,7 @@ internal safety reflexes remain fully active.
 
 ---
 
-### Phase 17: Stereolabs ZED Camera Support (r2d2)
+### Phase 18: Stereolabs ZED Camera Support (r2d2)
 
 **Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
 capture.  The ZED is already listed in the supported hardware table.
@@ -1025,7 +1076,7 @@ The ``_NonBlockingCamera`` wrapper handles the LeRobot/OpenCV camera interface;
 a ZED camera would need a similar adapter that reads from the ZED SDK's
 background capture thread.
 
-#### Task 17.1: ZedCamera wrapper (3 tests)
+#### Task 18.1: ZedCamera wrapper (3 tests)
 
 **Files**: NEW ``r2d2/src/r2d2/_cameras/zed.py``
 
@@ -1040,7 +1091,7 @@ background capture thread.
 - **Tests**: mock ZED SDK for unit tests, read returns correct shape,
   read_depth returns uint16, close is idempotent.
 
-#### Task 17.2: Register ZED in camera registry (2 tests)
+#### Task 18.2: Register ZED in camera registry (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_config.py``
 
@@ -1051,7 +1102,7 @@ background capture thread.
 - **Tests**: config parses with serial, missing serial raises clear error,
   publish_depth defaults to False.
 
-#### Task 17.3: Station config + launch script (1 test)
+#### Task 18.3: Station config + launch script (1 test)
 
 **Files**: NEW ``r2d2/config/station.so101.zed.yaml`` or similar.
 
@@ -1061,7 +1112,7 @@ background capture thread.
 
 ---
 
-### Phase 18: c3po Live View (optional)
+### Phase 19: c3po Live View (optional)
 
 **Goal**: A lightweight popup window showing live camera feeds and joint
 torque plots during teleop data collection.  Helps the operator see what the
@@ -1072,7 +1123,7 @@ It lives in a separate ``c3po.viewer`` submodule (or a standalone
 ``c3po-live`` entry point) with extra dependencies (``opencv-python-headless``
 or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 
-#### Task 18.1: Camera feed window (2 tests)
+#### Task 19.1: Camera feed window (2 tests)
 
 **Files**: NEW ``c3po/src/c3po/viewer/__init__.py``
 
@@ -1084,7 +1135,7 @@ or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 - **Tests**: window opens without error (headless test with mocked OpenCV),
   multiple camera feeds are tiled correctly.
 
-#### Task 18.2: Joint torque / position plot (1 test)
+#### Task 19.2: Joint torque / position plot (1 test)
 
 **Files**: ADAPT ``c3po/src/c3po/viewer/__init__.py``
 
@@ -1097,7 +1148,7 @@ or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 
 ---
 
-### Phase 19: BOX Dataset Upload (r2d2)
+### Phase 20: BOX Dataset Upload (r2d2)
 
 **Goal**: After recording, r2d2 automatically uploads the finalized dataset
 to the lab's BOX account (infinite storage via the advisor's account), then
@@ -1122,7 +1173,7 @@ pressing ``q``.  No upload logic on c3po.
 - **Zero new dependencies.**  Uses Python stdlib ``urllib`` for the BOX API.
   BOX's chunked upload is standard HTTP (session create → PUT parts → commit).
 
-#### Task 19.1: BOX upload client (4 tests)
+#### Task 20.1: BOX upload client (4 tests)
 
 **Files**: NEW ``r2d2/src/r2d2/_box_upload.py``
 
@@ -1143,7 +1194,7 @@ pressing ``q``.  No upload logic on c3po.
   chunked upload splits file correctly, commit returns expected URL,
   auth failure raises BoxUploadError, network error retries once.
 
-#### Task 19.2: r2d2 — wire upload into StopRecording flow (3 tests)
+#### Task 20.2: r2d2 — wire upload into StopRecording flow (3 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
@@ -1180,7 +1231,7 @@ pressing ``q``.  No upload logic on c3po.
               )
   ```
 - The ``_box_token`` is captured from the server configuration at handler
-  creation time (see Task 19.3).
+  creation time (see Task 20.3).
 - The upload runs in a thread-pool executor to avoid blocking the event loop.
 - ``shutil.rmtree`` also runs in the executor since it's a potentially slow
   filesystem operation on large directory trees.
@@ -1189,7 +1240,7 @@ pressing ``q``.  No upload logic on c3po.
   dataset preserved on upload failure, ``dataset_uploaded`` StatusMessage
   sent on success.
 
-#### Task 19.3: Server config — BOX token from environment (2 tests)
+#### Task 20.3: Server config — BOX token from environment (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
