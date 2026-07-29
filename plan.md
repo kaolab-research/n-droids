@@ -790,184 +790,60 @@ covers the immediate need.  Will be implemented when tokens are available.
 
 ---
 
-### Phase 15: Controller Architecture (powered leaders, haptic feedback, auto-reset)
+### Phase 15: Controller Architecture ✅ (27 tests, hardware-verified)
 
-**Design rationale.**  The current architecture has two categories: ``arms``
-(receive actions from c3po) and ``controllers`` (read-only, appear in
-observations).  ALOHA-style powered leader arms blur this line — they produce
-joint positions AND receive haptic feedback / execute reset motions — but
-**the researcher never directly commands a leader arm.**  The leader either
-moves passively (pushed by the human) or actively (haptics / reset computed
-by r2d2 server-side).  Therefore:
+**Design.**  A new ``Controller`` dataclass (``r2d2/src/r2d2/_controller.py``)
+wraps each LeRobot Teleoperator with n-droids-specific logic: capability
+gating, protocol key formatting, and hardware command sequences.  The control
+loop calls ``ctrl.get_state()`` and ``ctrl.apply_haptics()`` instead of ad-hoc
+teleop access — capability checks live inside the Controller, not scattered
+across the handler.
 
-- **No new protocol category is needed.**  Powered leaders remain in the
-  existing ``controllers`` bucket.  Their state streams to c3po in observations;
-  any commands they receive are generated within r2d2, not sent over the
-  WebSocket.
-- **The protocol's ``Action`` message targets only ``arms``** (followers).  The
-  researcher commands the follower; the leader follows physics.
+**``Controller`` fields:** ``name``, ``teleop``, ``arm_prefix``, ``joint_names``,
+``capabilities``, ``home_position``, ``haptic_gain``.
 
-**Controller boundary — NUC vs. researcher's machine.**  The dividing line is
-**physical coupling to the robot station**:
+**Supported capabilities:**
+- ``"auto_reset"`` — leader snaps to ``home_position`` on connect
+  (enables torque, writes positions, disables torque).
+  **Hardware-verified on SO‑101.**  Uses LeRobot's ``enable_torque()`` /
+  ``send_feedback()`` / ``disable_torque()`` — already present on SOLeader.
+- ``"haptic_feedback"`` — stub that reads ``{motor}.current`` / ``.effort`` /
+  ``.torque`` from the follower observation and sends scaled position
+  feedback.  Gates on non-empty ``feedback_features`` (SOLeader passes,
+  RebotArm102Leader skips).  Full torque-based haptics requires hardware
+  with current control (ALOHA-style leaders).
 
-| Controller | Location | Rationale |
+**Manifest changes (both r2d2 and c3po):** controller entries now include
+``capabilities``, ``joint_names``, and optionally ``home_position``.
+
+**c3po additions:** ``robot.controller_capabilities`` and
+``robot.leader_home_position`` properties.
+
+**New config:** ``station.so101.nocam.yaml`` + ``launch_scripts/so101_nocam.sh``
+— SO‑101 with no cameras and auto‑reset enabled.
+
+**Files changed / created:**
+
+| File | Change |
+|---|---|
+| NEW ``r2d2/src/r2d2/_controller.py`` | ``Controller`` dataclass with ``get_state()``, ``reset_to_home()``, ``apply_haptics()`` |
+| NEW ``r2d2/tests/test_controller.py`` | 27 tests: construction, get_state, reset_to_home (9), apply_haptics (8) |
+| ADAPT ``r2d2/src/r2d2/_config.py`` | ``StationConfig`` gains ``teleop_capabilities`` and ``teleop_home_positions``; ``load_station_config`` parses them from YAML |
+| ADAPT ``r2d2/src/r2d2/_manifest.py`` | Controller entries include ``capabilities`` |
+| ADAPT ``r2d2/src/r2d2/_server.py`` | Imports ``Controller``; sensor tuple includes controllers; control loop uses ``ctrl.get_state()`` and ``ctrl.apply_haptics()``; manifest built from Controller objects; ``_auto_reset_controllers()`` called after handshake, sends ``leader_reset_complete`` status |
+| ADAPT ``r2d2/tests/test_manifest.py`` | +2 tests: capabilities included, defaults empty |
+| ADAPT ``c3po/src/c3po/robot.py`` | ``controller_capabilities`` and ``leader_home_position`` properties |
+| ADAPT ``c3po/tests/test_robot.py`` | +3 tests: controller_capabilities, leader_home_position |
+| NEW ``r2d2/config/station.so101.nocam.yaml`` | SO‑101 config with auto‑reset, no cameras |
+| NEW ``r2d2/launch_scripts/so101_nocam.sh`` | Launch script for nocam config |
+
+**Hardware status:**
+
+| Platform | Auto‑reset | Haptics |
 |---|---|---|
-| Leader arms (powered or unpowered) | **NUC** | Physically coupled to workcell; needs calibration; part of station config |
-| Joysticks, gamepads, SpaceMouse | **Researcher's machine** | Generic HID peripherals; researcher brings their own; reads in policy code with ``pygame`` / ``pynput`` / ``spacymouse`` |
-| Keyboard (q/n/r) | **Researcher's machine** | Already handled by c3po's ``KeyboardListener`` as a small convenience; no additional scope |
-
-**c3po does not become a general controller library.**  The ``KeyboardListener``
-stays as the only built-in controller convenience.  For joysticks, gamepads,
-and SpaceMouse, the researcher imports whatever library they prefer directly
-in their policy script — c3po has no opinion and no dependency on HID libraries.
-
-#### Task 15.1: Manifest — add ``capabilities`` to controllers (3 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_manifest.py``, ADAPT ``c3po/src/c3po/_manifest.py``
-
-- Add an optional ``capabilities: list[str]`` field to each controller entry
-  in the manifest:
-  ```json
-  {
-    "name": "left_leader",
-    "type": "joint_position",
-    "joint_count": 6,
-    "capabilities": ["haptic_feedback", "auto_reset"]
-  }
-  ```
-- Supported capability values:
-  - ``"haptic_feedback"`` — controller can receive force/torque feedback from r2d2
-  - ``"auto_reset"`` — controller can move to a home position on initialization
-  - Absence of ``capabilities`` (or an empty list) means a passive sensor-only
-    controller (e.g., unpowered SO-101 leader).
-- r2d2's ``build_manifest()``: include ``capabilities`` from the station config's
-  teleop section when present, default to ``[]``.
-- c3po's ``parse_manifest()``: expose ``capabilities`` on the parsed controller
-  entries so ``Robot`` can provide a ``controller_capabilities`` property.
-- **Tests**: manifest roundtrip with capabilities, missing capabilities
-  defaults to empty list, unknown capability value does not break parsing.
-
-#### Task 15.2: Station config — add teleop capabilities (2 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
-
-- Add an optional ``capabilities`` list to the ``teleop`` section in station YAML:
-  ```yaml
-  teleop:
-    type: so_leader
-    id: my_leader_arm
-    port: /dev/serial/by-path/...
-    baudrate: 1000000
-    capabilities: []  # passive leader (default)
-  ```
-  ```yaml
-  teleop:
-    type: aloha_leader
-    id: left_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-  ```
-- ``StationConfig`` dataclass: add ``teleop_capabilities: list[str]`` field,
-  default ``[]``.
-- ``load_station_config()``: parse ``capabilities`` from the teleop section.
-- **Tests**: config with capabilities parses correctly, missing capabilities
-  defaults to empty, unknown capability warns but does not error.
-
-#### Task 15.3: r2d2 — haptic feedback loop (4 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
-
-- In hardware-mode control loop, **after** reading ``get_observation()`` (which
-  includes motor currents for Feetech / libfranka / Kortex arms), compute
-  haptic feedback torques and send them to the teleop if it supports it.
-- Add a ``_send_haptic_feedback(teleop, le_obs, joint_names)`` helper:
-  - Extract motor currents/efforts from ``le_obs``.
-  - Map to joint torques using a simple proportional gain (configurable,
-    default ``0.05``).  Exact mapping is hardware-specific — start with a
-    generic interface that each teleop backend can override.
-  - Call ``teleop.send_feedback(torques)`` if the teleop exposes that method.
-- The haptic loop runs at the control rate (every cycle).  It must be fast
-  (sub-millisecond) — no I/O, just arithmetic + a serial write if the motor
-  bus supports it.
-- Guard with ``"haptic_feedback" in teleop_capabilities`` — passive leaders
-  skip this entirely.
-- **Tests**: haptic loop skipped when capability absent, feedback computed
-  from mock observations, feedback not sent when teleop lacks ``send_feedback``,
-  proportional gain is configurable.
-
-#### Task 15.4: r2d2 — auto-reset on connect (5 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_server.py``
-
-- After the ``describe`` handshake completes, if the teleop supports
-  ``"auto_reset"``, execute an initialization sequence:
-  1. Send the leader to a configured home position (joint-space waypoints).
-  2. Wait for the leader to reach each waypoint (position error < threshold).
-  3. Once at home, release any active torque and hand control to the human.
-- The home position is read from the station config (new ``home_position``
-  field in the teleop section) or from a calibration file.  If neither
-  exists, skip auto-reset and log a warning.
-- The reset sequence runs **after** the ``describe_response`` is sent but
-  **before** the control loop starts streaming observations.  This way c3po's
-  ``reset()`` call receives observations from a leader already at its home
-  position.
-- Add a ``leader_home_position`` property to ``Robot`` so the researcher can
-  introspect where the leader will reset to.
-- **Tests**: auto-reset skips when capability absent, home position read
-  from config, reset sequence runs to completion, timeout if leader fails
-  to reach home, observations stream only after reset completes.
-
-#### Task 15.5: c3po — expose controller capabilities (2 tests)
-
-**Files**: ADAPT ``c3po/src/c3po/robot.py``, ADAPT ``c3po/src/c3po/_manifest.py``
-
-- Add a ``controller_capabilities`` property to ``Robot``:
-  ```python
-  @property
-  def controller_capabilities(self) -> dict[str, list[str]]:
-      """Mapping from controller name to its capabilities list."""
-      return {
-          c["name"]: c.get("capabilities", [])
-          for c in self._manifest["controllers"]
-      }
-  ```
-- Add a ``leader_home_position`` property that returns the home position from
-  the manifest (if present), or ``None``.
-- These are informational — the researcher's code can check them but the
-  protocol does not change.
-- **Tests**: property returns correct capabilities, empty dict for stations
-  with no controllers, home position is None when not configured.
-
-#### Task 15.6: Station config — ALOHA-style powered leader example (1 test)
-
-**Files**: NEW ``r2d2/config/station.aloha.yaml``
-
-- Create a reference config for an ALOHA-style bimanual station:
-  ```yaml
-  station_model: aloha_bimanual
-
-  robot:
-    type: so_follower
-    # ... left follower config ...
-
-  robot_right:
-    type: so_follower
-    # ... right follower config ...
-
-  teleop_left:
-    type: aloha_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-    home_position: [0.0, -0.5, 0.3, 0.0, 0.0, 0.0]
-
-  teleop_right:
-    type: aloha_leader
-    port: /dev/serial/by-path/...
-    capabilities: [haptic_feedback, auto_reset]
-    home_position: [0.0, 0.5, -0.3, 0.0, 0.0, 0.0]
-  ```
-- **Test**: config loads without error, capabilities and home position
-  parsed correctly.
+| SO‑101 leader | ✅ verified | ❌ stub (Feetech servos lack torque control) |
+| ReBot 102 leader | ❌ (``send_feedback`` raises ``NotImplementedError``) | ❌ (``feedback_features = {}``) |
+| ALOHA / future powered leader | ✅ (same SOLeader API) | ❌ stub (ready when hardware arrives) |
 
 ---
 
@@ -1293,7 +1169,8 @@ pressing ``q``.  No upload logic on c3po.
 | Phase 12 (dataset forwarding) | 6 | 6 |
 | Phase 13 (LeRobot v0.6.0 bump) | — | — |
 | Phase 14 (ReBot B601-DM) | — | 18 (4 skipped) |
-| **Running total** | **134 (2 skipped)** | **97 (5 skipped, 1 failure)** |
+| Phase 15 (Controller architecture) | 3 | 27 |
+| **Running total** | **137 (2 skipped)** | **120 (5 skipped, 1 failure)** |
 
 ---
 
@@ -1323,3 +1200,8 @@ pressing ``q``.  No upload logic on c3po.
 | Dataset download (`robot.download_dataset()`) | ✅ |
 | ReBot B601-DM config + launch scripts | ✅ (manifest + mapping proven in tests) |
 | ReBot bimanual leader-follower teleop | ✅ (hardware-verified) |
+| Controller abstraction (`Controller` dataclass) | ✅ |
+| Manifest-driven capabilities (`controller_capabilities`) | ✅ |
+| Auto-reset (leader → home on connect) | ✅ (hardware-verified on SO-101) |
+| Haptic feedback stub (`.current` → `send_feedback`) | ✅ (stub, gates on capability) |
+| No-camera station config (`so101.nocam.yaml`) | ✅ |
