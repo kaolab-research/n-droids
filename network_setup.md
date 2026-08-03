@@ -157,83 +157,10 @@ nmcli con up "Wired connection 1"
 
 ---
 
-## 7. Franka Panda Setup (Phase 16)
+## 7. Robot-Specific Setup
 
-### 7.1 One-time NUC Setup
+This guide covers only the network layer (IP configuration, Ethernet
+cabling).  For robot-specific setup instructions, see:
 
-The NUC must run Ubuntu 24.04 LTS.  Run these commands once:
-
-```bash
-# Enable real-time kernel
-sudo pro attach <your-ubuntu-pro-token>
-sudo pro enable realtime-kernel
-sudo reboot
-```
-
-After reboot: verify with `uname -a` (should show PREEMPT_RT).
-
-```bash
-# Create realtime group and limits
-sudo addgroup realtime
-sudo usermod -a -G realtime $USER
-```
-
-Add to `/etc/security/limits.conf`:
-
-```
-@realtime soft rtprio 99
-@realtime soft memlock 102400
-@realtime hard rtprio 99
-@realtime hard memlock 102400
-```
-
-Log out and back in.  Verify: `groups` should include `realtime`.
-
-```bash
-# Install CUDA on RT kernel (for ZED cameras)
-wget https://raw.githubusercontent.com/timschneider42/franky/master/tools/install_cuda_realtime.bash
-chmod +x install_cuda_realtime.bash
-sudo ./install_cuda_realtime.bash
-```
-
-### 7.2 Per-Session Startup
-
-**Step 1: Power on the Franka control box.**  Wait ~60 s.
-
-**Step 2: Unlock joints and activate FCI via Franka Desk.**
-
-Open `https://172.16.0.2` in a browser on the NUC.
-- Login (default: `franka` / `franka`).
-- Go to **Robot** page, click **Unlock Joints**.
-- Click **Activate FCI** (enables libfranka on port 30200).
-
-**Step 3: Build and start r2d2.**
-
-```bash
-cd ~/Projects/r2d2
-docker build -t r2d2:latest .
-./launch_scripts/franka.sh
-docker logs -f r2d2-franka
-```
-
-Look for: `Franka connected: 172.16.0.2 (dynamics=10%)`
-
-**Step 4: Run the test script from the inference machine.**
-
-```bash
-sudo ip addr add 10.42.0.2/24 dev <interface>
-cd ~/Projects/toy-so101
-uv run python test_franka.py
-```
-
-The arm moves in a gentle sinusoidal pattern.  Ctrl-C to stop.
-
-### 7.3 Franka Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `communication_constraints_violation` | RT kernel or realtime group not set up (Section 7.1) |
-| `IncompatibleVersionException` | Robot firmware requires different libfranka version |
-| FCI activation greyed out | Unlock joints first |
-| Arm does not move | FCI not activated in Desk |
-| `franky is not installed` in Docker logs | Rebuild Docker image |
+- [Franka Panda Setup](./franka_setup.md) — PREEMPT_RT kernel, Franka Desk,
+  Docker container with franky, per-session startup sequence.

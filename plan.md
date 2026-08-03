@@ -810,7 +810,11 @@ across the handler.
 
 ---
 
-### Phase 16: Franka Panda Support (r2d2)
+### Phase 16: Franka Panda Support (r2d2) ✅ (16 tests, hardware-verified)
+
+**Status**: Implemented, tested, and hardware-verified on a Franka Panda
+(server v5) with libfranka 0.9.2.  The arm streams sinusoidal positions via
+c3po at 10-50 Hz with bounded tracking error and no error accumulation.
 
 **Goal**: Support the Franka Panda robot arm for DROID-style data collection.
 The Franka control box has its own internal real-time controller with active
@@ -831,7 +835,7 @@ Franka Research 3 uses libfranka 0.21.2; older Panda robots may use 0.9.2
 or earlier.  franky's wheel archive covers all of them.
 
 **NUC kernel setup — Ubuntu Pro realtime-kernel.**  The NUC runs Ubuntu
-24.04 (see Phase 23 migration).  Enable the real-time kernel:
+24.04 (see Phase 25 migration).  Enable the real-time kernel:
 
 ```bash
 sudo pro enable realtime-kernel
@@ -866,12 +870,16 @@ unlock joints, activate FCI.  Actual motion control **must** go through
 libfranka/FCI — there is no HTTP endpoint for streaming joint
 positions.  The Desk's jogging WebSocket is undocumented and fragile.
 
-**Control mode — joint velocity.**  For 50 Hz teleop streaming, we use
-franky's joint velocity control (``JointVelocityMotion``) rather than
-discrete position moves.  c3po sends joint velocity targets; r2d2
-streams them to franky at the control rate.  This is the natural mapping
-for real-time teleop — no trajectory planning overhead, continuous
-motion, and matches how the SO-101 already works via position deltas.
+**Control mode — joint position with preemption.**  r2d2 sends joint
+position targets at the station control rate (50 Hz).  Each
+target is sent via ``robot.move(JointMotion(targets), asynchronous=True)``
+--- the ``asynchronous`` flag prevents blocking, and the next cycle's
+call preempts the previous motion.  franky replans via Ruckig from
+the current state to the new target within the 20 ms cycle budget.
+At 5 % dynamics (``relative_dynamics_factor = 0.05``), the trajectory
+planner blends smoothly between consecutive targets, producing fluid
+motion with bounded tracking error (~0.04 rad RMS) that does not
+accumulate over time.
 
 **Implementation.**  The Franka driver lives inside the vendored LeRobot tree
 (``lerobot/src/lerobot/robots/franka/``), following LeRobot convention exactly.
@@ -907,22 +915,22 @@ ADAPT ``r2d2/src/r2d2/_config.py``
 
 - ``connect()``: instantiate ``franky.Robot(ip)``, call
   ``recover_from_errors()``, set ``relative_dynamics_factor = 0.1`` for
-  safety.  Initialize ``franky.Gripper(ip)`` as a separate gripper object.
-- ``get_observation()``: read ``robot.current_state`` → extract ``q``
-  (7 joint positions), ``dq`` (7 joint velocities), gripper width from
-  ``gripper.read_once()``.  Return dict with ``{name}.pos`` and
-  ``{name}.vel`` keys for the arm, and a separate ``gripper/joint_position``
-  for the gripper.
-- ``send_action(action)``: extract arm velocity targets from the protocol
-  action dict, call ``robot.move(JointVelocityMotion(velocities))``.
+  for safety.  Initialize ``franky.Gripper(ip)`` as a separate gripper
+  object; catch and log exceptions if the stock hand was replaced
+  (e.g. with a Robotiq 2F-85).
+- ``get_observation()``: read ``robot.current_joint_positions`` and
+  ``robot.current_joint_velocities`` (non-blocking, lock-free triple
+  buffer).  Return dict with ``{name}.pos`` and ``{name}.vel`` keys
+  for the arm, and a separate ``panda_finger_joint1.pos`` for the gripper.
+- ``send_action(action)``: extract joint position targets from the
+  action dict, call ``robot.move(JointMotion(targets), asynchronous=True)``.
   Extract gripper width target, call ``gripper.move(width)``.
-  Separate the gripper path so a failed gripper command doesn't block
+  Separate the gripper path so a failed gripper command does not block
   arm motion.
-- ``disconnect()``: close gripper, close robot.  Verify franky's close
-  behaviour triggers a controlled stop (torque remains active but arm
-  holds position).  Idempotent.
+- ``disconnect()``: drop franky object references.  franky's destructor
+  triggers a controlled stop.  Idempotent.
 - **Tests**: mock franky for unit tests, observation dict has 7 + 1
-  (gripper) joints, send_action forwards velocity targets correctly,
+  (gripper) joints, send_action forwards position targets correctly,
   disconnect is idempotent, error recovery on connect.
 
 #### Task 16.3: Station config + launch script (1 test)
@@ -950,7 +958,138 @@ NEW ``r2d2/launch_scripts/franka.sh``
 
 ---
 
-### Phase 17: Stereolabs ZED Camera Support (r2d2)
+### Phase 17: Robotiq 2F-85 Gripper Support (r2d2) ✅ (24 tests)
+
+**Goal**: Support the Robotiq 2F-85 gripper (connected via USB to the NUC) as an
+alternative to the stock Franka hand.  This is part of the DROID-style setup
+where the original Franka gripper has been physically replaced with a Robotiq
+gripper.  The gripper is exposed through the same manifest and protocol interface
+as the stock Franka hand — a single ``gripper/joint_position`` key in both
+action and observation dictionaries.
+
+**Key design decision — pyRobotiqGripper.**  After evaluating both
+`pyRobotiqGripper`_ (castetsb, 84 ★, MIT) and `2f85-python-driver`_
+(PhilNad, 17 ★, MIT), we selected **pyRobotiqGripper** for three reasons:
+
+1. **Raw bit-level control (0-255)** normalizes cleanly to DROID's [0, 1] range.
+   The alternative library uses mm, requiring calibration to convert.
+2. **``realTimePositionMove()`` state machine** designed for 100 Hz control
+   loops — the gripper accepts a target, begins motion, and reports whether
+   it has reached the target on subsequent reads.  Non-blocking and ideal for
+   r2d2's 50 Hz control cycle.
+3. **Eight typed exception classes** (``RobotiqGripperError``,
+   ``RobotiqGripperNotConnectedError``, etc.) for robust fault handling —
+   gripper faults won't crash the arm control loop.
+
+.. _pyRobotiqGripper: https://github.com/castetsb/pyRobotiqGripper
+.. _2f85-python-driver: https://github.com/PhilNad/2f85-python-driver
+
+**Dependencies.**  pyRobotiqGripper depends on ``pymodbus`` (Modbus RTU over
+serial for the Robotiq controller), ``numpy``, and ``pyserial``.  All are
+pure Python — no system libraries needed beyond the USB serial port access
+(``/dev/ttyUSB*`` or ``/dev/serial/by-path/*``).
+
+**Normalization.**  The Robotiq gripper reports position as 0-255 bits.
+Following DROID convention, this is normalized to [0, 1] where:
+
+- 0.0 = fully open (85 mm)
+- 1.0 = fully closed (0 mm)
+- ``normalized = 1.0 - bits / 255.0``
+
+This matches DROID's ``gripper_position`` encoding exactly: 0 = open, 1 = closed.
+
+**Integration model.**  ``FrankaRobot.connect()`` detects ``gripper.type ==
+"robotiq"`` in the station config and creates a ``RobotiqGripperWrapper``
+instead of ``franky.Gripper``.  The wrapper exposes the same interface:
+
+- ``gripper.state.width`` → meters (``0.085 * (1.0 - normalized)``)
+- ``gripper.move(width_m)`` → ``self._drv.move(bits, speed, force, wait=False)``
+- ``gripper.object_detected`` → ``self._drv.object_detected`` (read-only,
+  reports whether the gripper is holding an object — useful for autonomous
+  grasp detection)
+
+**Config format:**
+
+```yaml
+robot:
+  type: franka
+  ip: 172.16.0.2
+  gripper:
+    type: robotiq
+    serial_number: "C-51965"
+    speed: 150
+    force: 100
+```
+
+**Normalization.**
+- ``serial_number``: identifies the specific gripper (printed on the device,
+  used by pyRobotiqGripper to differentiate multiple grippers on the same bus).
+  Optional — if omitted, auto-detects the first available gripper.
+- ``speed``: 0-255 (default 150).  Maps to the gripper's internal speed
+  register.  Higher = faster close/open.
+- ``force``: 0-255 (default 100).  Maps to the gripper's internal force
+  register.  0 = minimum grip force, 255 = maximum.
+
+**Files to create:**
+
+```
+r2d2/src/r2d2/_robotiq/
+├── __init__.py              # Exports RobotiqGripperWrapper
+└── _wrapper.py              # RobotiqGripperWrapper class
+```
+
+#### Task 17.1: RobotiqGripperWrapper (4 tests)
+
+**Files**: NEW ``r2d2/src/r2d2/_robotiq/__init__.py``,
+NEW ``r2d2/src/r2d2/_robotiq/_wrapper.py``
+
+- ``RobotiqGripperWrapper(serial_number, speed, force)``: opens the gripper via
+  ``pyRobotiqGripper.RobotiqGripper(serial_number)``, activates it, sets initial
+  speed and force registers.
+- ``state`` property: returns a namespace with ``.width`` (meters),
+  ``.normalized_position`` ([0, 1]), ``.object_detected`` (bool).
+  Reads ``self._drv.getPosition()`` and ``self._drv.object_detected``.
+- ``move(width_m, speed=None, force=None)``: converts meters → normalized →
+  bits, calls ``self._drv.realTimePositionMove(bits, speed, force)`` with
+  ``wait=False``.  Non-blocking — the gripper motion runs independently.
+- ``close()``: calls ``self._drv.disconnect()``.  Idempotent.
+- **Tests**: open/close/move round-trips with mocked RobotiqGripper, width
+  conversion (0 m → 1.0 normalized, 0.085 m → 0.0 normalized), state returns
+  correct fields, close is idempotent, move with custom speed/force overrides.
+
+#### Task 17.2: Config + FrankaRobot integration (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_franka/robot.py``,
+ADAPT ``r2d2/src/r2d2/_franka/config.py``
+
+- Add ``GripperConfig`` dataclass: ``type`` (``"stock"`` | ``"robotiq"``),
+  ``serial_number``, ``speed``, ``force``.
+- ``FrankaRobotConfig`` gains optional ``gripper: GripperConfig`` field.
+  Defaults to ``GripperConfig(type="stock")`` for backward compatibility.
+- ``FrankaRobot.connect()``: if ``gripper.type == "robotiq"``, instantiate
+  ``RobotiqGripperWrapper`` instead of ``franky.Gripper``.  Catch connection
+  failures gracefully — log a warning, set ``self._gripper = None``, continue.
+- **Tests**: config defaults to stock gripper, robotiq config parses correctly,
+  robotiq gripper selected when type="robotiq", stock gripper used when
+  type="stock".
+
+#### Task 17.3: Station config + launch script (1 test)
+
+**Files**: NEW ``r2d2/config/station.franka.robotiq.yaml``,
+NEW ``r2d2/launch_scripts/franka_robotiq.sh``
+
+- YAML config with ``gripper.type: robotiq`` and the specific serial number.
+- Launch script adds ``--device=/dev/ttyUSB*`` (or ``/dev/serial/by-path/*``)
+  to Docker run command for USB serial access.
+- **Test**: config loads without error.
+
+**Files to adapt (Dockerfile):**
+
+- Add ``pymodbus`` to ``pip install`` (pyRobotiqGripper dependency).
+
+---
+
+### Phase 18: Stereolabs ZED Camera Support (r2d2)
 
 **Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
 capture (essential for the DROID setup).  The ZED SDK's internal grabbing
@@ -984,7 +1123,7 @@ lerobot/src/lerobot/cameras/zed/
 thread is active.  Fits seamlessly into r2d2's existing camera pipeline
 (``NonBlockingCamera`` → ``_camera_send_loop`` → binary frames).
 
-#### Task 17.1: ZedCameraConfig + ZedCamera (3 tests)
+#### Task 18.1: ZedCameraConfig + ZedCamera (3 tests)
 
 **Files**: NEW ``lerobot/src/lerobot/cameras/zed/configuration_zed.py``,
 NEW ``lerobot/src/lerobot/cameras/zed/zed_camera.py``
@@ -1002,7 +1141,7 @@ NEW ``lerobot/src/lerobot/cameras/zed/zed_camera.py``
 - **Tests**: mock ZED SDK, read returns correct shape (H, W, 3), read_depth
   returns uint16, close is idempotent.
 
-#### Task 17.2: Register ZED in r2d2 camera registry (2 tests)
+#### Task 18.2: Register ZED in r2d2 camera registry (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_config.py``
 
@@ -1011,7 +1150,7 @@ NEW ``lerobot/src/lerobot/cameras/zed/zed_camera.py``
 - **Tests**: config parses with serial_number, missing serial defaults to
   first available camera, ``publish_depth`` defaults to False.
 
-#### Task 17.3: Station config + launch script (1 test)
+#### Task 18.3: Station config + launch script (1 test)
 
 **Files**: NEW ``r2d2/config/station.franka.zed.yaml``,
 NEW ``r2d2/launch_scripts/franka_zed.sh``
@@ -1024,7 +1163,197 @@ NEW ``r2d2/launch_scripts/franka_zed.sh``
 
 ---
 
-### Phase 18: Lightweight LeRobot v3.0 Dataset Parser (c3po)
+### Phase 19: DROID Action Space Alignment (r2d2 + c3po)
+
+**Goal**: Align the Franka driver's action and observation spaces with the
+`DROID dataset format`_, enabling inference of pretrained DROID policies
+(specifically π₀.₅) without format translation layers.  This is the final
+integration step that makes the Franka + Robotiq + ZED hardware stack a
+functionally equivalent DROID station.
+
+.. _DROID dataset format: https://droid-dataset.github.io/
+
+**Background.**  DROID policies use **Cartesian end-effector control**:
+``abs_pos`` (3) + ``abs_rot_6d`` (6) + ``gripper_position`` (1) = **10D action
+space**.  The current Franka driver uses joint position (7D).  To be
+DROID-compatible, we need a Cartesian IK layer that converts Cartesian targets
+to joint positions on r2d2.
+
+**Key design decision — Cartesian IK on r2d2.**  Using franky's built-in
+``Kinematics.inverse()``, r2d2 solves IK for each Cartesian action target, then
+sends the resulting joint positions via the existing ``JointMotion`` pipeline.
+IK runs inside r2d2 (not c3po) so that:
+
+- Policies send Cartesian actions in DROID format — no format translation
+  needed on c3po or in the policy code.
+- IK uses the arm's **actual kinematics model** fetched from the Franka
+  control box (DH parameters, joint limits).  No hardcoded model that
+  could go stale.
+- **Null-space posture** can be controlled via franky's ``null_space``
+  parameter for predictable elbow behavior.
+
+**franky IK API reference.**  franky exposes kinematics through a
+``Kinematics`` helper (imported from the ``_franky`` C++ extension):
+
+```python
+from franky import Kinematics
+
+# One-time: create kinematics model from the robot
+kinematics = Kinematics(robot)
+
+# Per-cycle: solve IK for a Cartesian target
+target_pose = Affine(translation=[x, y, z], rotation=Rotation.from_6d(r))
+joints = kinematics.inverse(
+    target_pose,
+    q_near=current_joints,      # seed for IK solver (current state)
+    null_space=home_joints,      # preferred posture (7 floats)
+)
+```
+
+**Action space definition (matching DROID exactly):**
+
+| Key | Dtype | Range | Description |
+|---|---|---|---|
+| ``follower/abs_pos`` | float64[3] | meters | End-effector position in base frame |
+| ``follower/abs_rot_6d`` | float64[6] | radians | 6D rotation representation (first two columns of rotation matrix) |
+| ``follower/gripper_position`` | float64[1] | [0, 1] | Normalized gripper (0=open, 1=closed) |
+
+**Observation space (proprioception):**
+
+| Key | Dtype | Description |
+|---|---|---|
+| ``robot_state/cartesian_position`` | float64[3] | End-effector position (base frame) |
+| ``robot_state/cartesian_velocity`` | float64[6] | End-effector twist (vx, vy, vz, wx, wy, wz) |
+| ``robot_state/gripper_position`` | float64[1] | Normalized [0, 1] |
+| ``robot_state/joint_positions`` | float64[7] | Joint positions (rad) — for debugging |
+| ``robot_state/joint_velocities`` | float64[7] | Joint velocities (rad/s) — for debugging |
+
+Note: the joint-level keys are **supplementary** — included for diagnostics
+and debugging but not required by DROID policies.  The Cartesian keys are the
+primary interface.
+
+**Gripper normalization — finish Phase 17 work.**  Both the stock Franka hand
+and Robotiq gripper must report normalized [0, 1] in ``gripper_position``:
+
+- Stock Franka: ``normalized = 1.0 - grip.width / grip.max_width``
+  (``max_width = 0.08`` m for the standard Franka hand).
+- Robotiq: ``normalized = 1.0 - bits / 255.0`` (already done in Phase 17).
+
+This ensures the same policy works with either gripper.
+
+**Manifest changes.**  The manifest communicates available action/observation
+keys to c3po.  When the Franka driver detects DROID mode (config flag
+``droids_compatible: true``), it publishes the Cartesian action keys instead of
+joint position keys.  c3po sees the DROID interface and sends/receives
+Cartesian actions without any special casing.
+
+**Files to create / adapt:**
+
+```
+r2d2/src/r2d2/_franka/
+├── _ik.py                   # NEW: CartesianIK wrapper around franky.Kinematics
+├── robot.py                 # ADAPT: add send_action_cartesian(), get_observation() returns Cartesian keys
+└── config.py                # ADAPT: add droids_compatible flag
+```
+
+#### Task 19.1: Cartesian IK layer in FrankaRobot (4 tests)
+
+**Files**: NEW ``r2d2/src/r2d2/_franka/_ik.py``,
+ADAPT ``r2d2/src/r2d2/_franka/robot.py``
+
+- ``CartesianIK(robot)``: wraps ``franky.Kinematics`` with a configurable
+  null-space posture (default: current joint positions at connection time).
+- ``solve(target_pose, current_joints)`` → joint positions (7 floats).
+  Catches ``franky.KinematicsException`` (no valid IK solution) and returns
+  ``None`` — r2d2 skips the cycle rather than sending a bad target.
+- ``FrankaRobot.send_action(action)``: if ``droids_compatible`` mode, extract
+  ``abs_pos`` + ``abs_rot_6d``, construct ``Affine``, call ``CartesianIK.solve()``,
+  then send joint positions via ``JointMotion``.  If IK fails, log warning and
+  skip the cycle (arm holds position).
+- Gripper target extracted from ``gripper_position`` key, denormalized to width
+  in meters, sent to gripper as before.
+- **Tests**: valid Cartesian target produces joint positions, IK failure returns
+  None and arm holds position, position-only target (no rotation change) works,
+  translation + rotation target works, null-space posture affects elbow angle.
+
+#### Task 19.2: DROID-aligned observation space (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_franka/robot.py``
+
+- ``get_observation()`` in DROID mode returns Cartesian keys alongside joint
+  keys.  Read ``robot.current_pose`` (end-effector affine) and
+  ``robot.current_twist`` (Cartesian velocity) from franky.
+- Decompose ``current_pose`` into ``cartesian_position`` (translation vector)
+  and ``abs_rot_6d`` (first two columns of rotation matrix — 6 floats).
+- Gripper position always normalized to [0, 1].
+- Joint keys included as supplementary data (``joint_positions``,
+  ``joint_velocities``) for debugging/training auxiliary objectives.
+- **Tests**: observation dict contains all DROID keys with correct shapes
+  (pos=3, rot_6d=6, grip=1), Cartesian position matches franky's
+  ``current_pose``, rotation 6D representation is orthonormal (first two
+  columns of SO(3) matrix).
+
+#### Task 19.3: Action space validation + error handling (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_franka/robot.py``
+
+- Validate that incoming actions in DROID mode have the expected keys and
+  dtypes.  Reject with a clear error if keys are missing or shapes are wrong.
+- IK failure handling: if ``CartesianIK.solve()`` returns ``None``, skip the
+  cycle, increment a counter, log at WARNING level (rate-limited to 1/s).
+  Send a ``action_rejected`` StatusMessage to c3po so the researcher knows
+  the arm is holding position.
+- Joint limit enforcement: verify IK solution joints are within Franka's
+  joint limits (``robot.joint_limits``).  If any joint exceeds its limit by
+  >0.01 rad, skip the cycle and warn.
+- **Tests**: missing key raises clear error, IK failure increments skip counter
+  and sends StatusMessage, joint limit violation is caught, rate-limited
+  logging does not spam.
+
+#### Task 19.4: Manifest updates for Cartesian action keys (1 test)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_franka/robot.py``,
+ADAPT ``r2d2/src/r2d2/_manifest.py``
+
+- When ``droids_compatible: true``, the manifest advertises Cartesian action
+  keys (``follower/abs_pos``, ``follower/abs_rot_6d``,
+  ``follower/gripper_position``) and observation keys
+  (``robot_state/cartesian_position``, ``robot_state/cartesian_velocity``,
+  ``robot_state/gripper_position``).
+- c3po's ``Robot.action_keys`` and ``Robot.observation_keys`` reflect
+  Cartesian keys — policies can read these to auto-configure their IO.
+- **Test**: manifest contains Cartesian keys when droids_compatible=true.
+
+**Station config — DROID mode flag:**
+
+```yaml
+robot:
+  type: franka
+  ip: 172.16.0.2
+  droids_compatible: true
+  gripper:
+    type: robotiq
+    serial_number: "C-51965"
+    speed: 150
+    force: 100
+  cameras:
+    wrist_zed:
+      type: zed
+      serial_number: 41234567
+      resolution: HD720
+      fps: 30
+      publish_depth: true
+    scene_zed:
+      type: zed
+      serial_number: 41234568
+      resolution: HD720
+      fps: 30
+      publish_depth: false
+```
+
+---
+
+### Phase 20: Lightweight LeRobot v3.0 Dataset Parser (c3po)
 
 **Goal**: Let researchers read LeRobot v3.0 datasets (parquet + MP4) without
 installing the full ``lerobot`` package.  This directly supports n-droids'
@@ -1034,7 +1363,7 @@ core value prop: minimal dependencies on the researcher's machine.
 produced by r2d2's ``DatasetRecorder``.  Dependencies: ``pyarrow`` (already a
 c3po dependency), ``av`` or ``opencv-python-headless`` for MP4 decoding.
 
-#### Task 18.1: Episode reader — parquet + video (5 tests)
+#### Task 20.1: Episode reader — parquet + video (5 tests)
 
 **Files**: NEW ``c3po/src/c3po/data/__init__.py``, ``c3po/src/c3po/data/_reader.py``
 
@@ -1044,7 +1373,7 @@ c3po dependency), ``av`` or ``opencv-python-headless`` for MP4 decoding.
 - **Tests**: read single-episode dataset, video frame count matches parquet
   frame count, depth PNG sequence, missing video directory handled gracefully.
 
-#### Task 18.2: Dataset metadata — info.json + stats.json (2 tests)
+#### Task 20.2: Dataset metadata — info.json + stats.json (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/_reader.py``
 
@@ -1052,7 +1381,7 @@ c3po dependency), ``av`` or ``opencv-python-headless`` for MP4 decoding.
 - Expose ``fps``, ``robot_type``, ``total_episodes``, ``total_frames``.
 - **Tests**: info fields match, stats contain all expected features.
 
-#### Task 18.3: Public API — ``open_dataset`` context manager (2 tests)
+#### Task 20.3: Public API — ``open_dataset`` context manager (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/__init__.py``
 
@@ -1063,7 +1392,7 @@ c3po dependency), ``av`` or ``opencv-python-headless`` for MP4 decoding.
 
 ---
 
-### Phase 19: c3po Live View (tabled)
+### Phase 21: c3po Live View (tabled)
 
 **Goal**: A lightweight popup window showing live camera feeds and joint
 torque plots during teleop data collection.  Helps the operator see what the
@@ -1074,7 +1403,7 @@ It lives in a separate ``c3po.viewer`` submodule (or a standalone
 ``c3po-live`` entry point) with extra dependencies (``opencv-python-headless``
 or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 
-#### Task 19.1: Camera feed window (2 tests)
+#### Task 21.1: Camera feed window (2 tests)
 
 **Files**: NEW ``c3po/src/c3po/viewer/__init__.py``
 
@@ -1086,7 +1415,7 @@ or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 - **Tests**: window opens without error (headless test with mocked OpenCV),
   multiple camera feeds are tiled correctly.
 
-#### Task 19.2: Joint torque / position plot (1 test)
+#### Task 21.2: Joint torque / position plot (1 test)
 
 **Files**: ADAPT ``c3po/src/c3po/viewer/__init__.py``
 
@@ -1099,7 +1428,7 @@ or ``matplotlib``).  c3po's core dependency footprint stays at 3.
 
 ---
 
-### Phase 20: BOX Dataset Upload (r2d2)
+### Phase 22: BOX Dataset Upload (r2d2)
 
 **Goal**: After recording, r2d2 automatically uploads the finalized dataset
 to the lab's BOX account (infinite storage via the advisor's account), then
@@ -1124,7 +1453,7 @@ pressing ``q``.  No upload logic on c3po.
 - **Zero new dependencies.**  Uses Python stdlib ``urllib`` for the BOX API.
   BOX's chunked upload is standard HTTP (session create → PUT parts → commit).
 
-#### Task 20.1: BOX upload client (4 tests)
+#### Task 22.1: BOX upload client (4 tests)
 
 **Files**: NEW ``r2d2/src/r2d2/_box_upload.py``
 
@@ -1145,7 +1474,7 @@ pressing ``q``.  No upload logic on c3po.
   chunked upload splits file correctly, commit returns expected URL,
   auth failure raises BoxUploadError, network error retries once.
 
-#### Task 20.2: r2d2 — wire upload into StopRecording flow (3 tests)
+#### Task 22.2: r2d2 — wire upload into StopRecording flow (3 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
@@ -1191,7 +1520,7 @@ pressing ``q``.  No upload logic on c3po.
   dataset preserved on upload failure, ``dataset_uploaded`` StatusMessage
   sent on success.
 
-#### Task 20.3: Server config — BOX token from environment (2 tests)
+#### Task 22.3: Server config — BOX token from environment (2 tests)
 
 **Files**: ADAPT ``r2d2/src/r2d2/_server.py``
 
@@ -1205,7 +1534,7 @@ pressing ``q``.  No upload logic on c3po.
 
 ---
 
-### Phase 21: Remote Lab Server as Inference Machine (design tabled)
+### Phase 23: Remote Lab Server as Inference Machine (design tabled)
 
 **Goal**: Support running c3po on a lab server (not physically cabled to the
 NUC) for large policy inference that doesn't fit on a laptop.  The protocol is
@@ -1238,14 +1567,14 @@ but policy rollouts with buffered actions could still work.
 
 ---
 
-### Phase 22: Operational Maturity Roadmap (tabled)
+### Phase 24: Operational Maturity Roadmap (tabled)
 
 **Goal**: Transform N-Droids from a solo-developer research prototype into a
 maintainable, collaborative-grade software project.  Items are prioritized by
 impact-to-effort ratio.  Everything below is deferred — the immediate priority
-is Franka + ZED support for the DROID project.
+Franka + ZED + Robotiq support for the DROID project.
 
-#### 22.1: CI/CD Pipeline (GitHub Actions) — highest priority
+#### 24.1: CI/CD Pipeline (GitHub Actions) — highest priority
 
 **Why**: 257 tests with zero automation.  Every change is tested manually on
 one machine.  A CI pipeline catches regressions before they reach hardware.
@@ -1261,7 +1590,7 @@ one machine.  A CI pipeline catches regressions before they reach hardware.
 Uses ``astral-sh/setup-uv@v5`` for zero-config ``uv`` caching.  Estimated
 setup time: 1–2 hours.
 
-#### 22.2: Protocol de-duplication — high priority
+#### 24.2: Protocol de-duplication — high priority
 
 **Why**: ``_protocol.py`` (344 lines) is manually duplicated in both repos.
 Divergence causes silent incompatibility — a time bomb for a two-process
@@ -1277,7 +1606,7 @@ message type).  For local development, use ``uv``'s path dependency:
 n-droids-protocol = { path = "../n-droids-protocol", editable = true }
 ```
 
-#### 22.3: Linting & Formatting (Ruff) — high priority
+#### 24.3: Linting & Formatting (Ruff) — high priority
 
 **Why**: Consistent style catches real bugs (unused imports, undefined names,
 mutable defaults).  Ruff is fast (Rust) and replaces a dozen tools.
@@ -1286,7 +1615,7 @@ mutable defaults).  Ruff is fast (Rust) and replaces a dozen tools.
 pycodestyle, pyflakes, isort, pyupgrade, bugbear, comprehensions, and
 simplify.  Run ``uv run ruff check . --fix`` once, then enforce in CI.
 
-#### 22.4: Pre-commit Hooks — medium priority
+#### 24.4: Pre-commit Hooks — medium priority
 
 **Why**: Catches issues before they're committed (trailing whitespace, YAML
 syntax errors, accidentally committed secrets).  Prevents the "CI is red →
@@ -1295,7 +1624,7 @@ fix → push again" loop.
 **How**: ``.pre-commit-config.yaml`` with ruff, trailing-whitespace,
 end-of-file-fixer, check-yaml, check-toml, detect-private-key.
 
-#### 22.5: Type Checking (Mypy) — medium priority
+#### 24.5: Type Checking (Mypy) — medium priority
 
 **Why**: The protocol layer is a contract between two processes.  A type error
 means garbled messages, not a clean exception.
@@ -1304,7 +1633,7 @@ means garbled messages, not a clean exception.
 and ``exceptions`` modules.  Loose mode on everything else.  Add
 ``[tool.mypy]`` to ``pyproject.toml``.
 
-#### 22.6: Docker Image CI + Container Registry — medium priority
+#### 24.6: Docker Image CI + Container Registry — medium priority
 
 **Why**: The Dockerfile clones LeRobot from GitHub and applies patches.  If the
 repo moves or patches stop applying cleanly, the image silently fails to build.
@@ -1312,7 +1641,7 @@ repo moves or patches stop applying cleanly, the image silently fails to build.
 **How**: Add a Docker build job to CI (above).  Push built images to GitHub
 Container Registry (GHCR) on main branch pushes.
 
-#### 22.7: Dependency Update Automation — low priority
+#### 24.7: Dependency Update Automation — low priority
 
 **Why**: Dependencies ship security patches.  Automated PRs let you review
 and merge on your schedule.
@@ -1320,7 +1649,7 @@ and merge on your schedule.
 **How**: Enable Dependabot on GitHub (Settings → Code security → Dependabot),
 or add ``.github/dependabot.yml``.  Dependabot supports ``uv.lock`` natively.
 
-#### 22.8: Conventional Commits + Auto-Changelog — low priority
+#### 24.8: Conventional Commits + Auto-Changelog — low priority
 
 **Why**: When c3po is published to PyPI, users need to know what changed.
 Manual changelogs are always forgotten.
@@ -1331,7 +1660,7 @@ messages.  Use ``commitizen`` to auto-bump versions and generate
 
 ---
 
-### Phase 23: Ubuntu 24.04 LTS Migration
+### Phase 25: Ubuntu 24.04 LTS Migration
 
 **Goal**: Migrate the NUC and all development workflows from Ubuntu 22.04
 LTS to 24.04 LTS (Noble Numbat).  Ubuntu 22.04 enters end-of-standard-support
@@ -1351,7 +1680,7 @@ Proactive migration avoids a rush when 22.04 security updates stop.
 - **Python 3.12** is the default in 24.04, matching r2d2's ``requires-python``
   and the Docker base image.  22.04 defaults to Python 3.10.
 
-#### Task 23.1: NUC OS upgrade (no tests)
+#### Task 25.1: NUC OS upgrade (no tests)
 
 **Files**: ``n-droids/network_setup.md``, ``n-droids/usb_setup.md``
 
@@ -1380,7 +1709,7 @@ Proactive migration avoids a rush when 22.04 security updates stop.
 - Update ``usb_setup.md``: ``/dev/serial/by-path/`` symlinks are kernel-version
   dependent.  Verify and re-document paths after the upgrade.
 
-#### Task 23.2: Development environment — Python version alignment (no tests)
+#### Task 25.2: Development environment — Python version alignment (no tests)
 
 **Files**: ``r2d2/pyproject.toml``, ``c3po/pyproject.toml``
 
@@ -1397,7 +1726,7 @@ Proactive migration avoids a rush when 22.04 security updates stop.
 
 - Run both test suites on Python 3.12 to verify no regressions.
 
-#### Task 23.3: Docker base image bump (no tests)
+#### Task 25.3: Docker base image bump (no tests)
 
 **Files**: ``r2d2/Dockerfile``
 
@@ -1410,9 +1739,9 @@ Proactive migration avoids a rush when 22.04 security updates stop.
 - Build and test the Docker image on the upgraded NUC with ``docker build -t
   r2d2:latest . && docker run --rm r2d2:latest --toy``.
 
-#### Task 23.4: CI — add Python 3.12 + 24.04 build matrix (no tests, deferred to Phase 22.1)
+#### Task 25.4: CI — add Python 3.12 + 24.04 build matrix (no tests, deferred to Phase 24.1)
 
-- When the CI pipeline is set up (Phase 22.1), include Python 3.12 in the
+- When the CI pipeline is set up (Phase 24.1), include Python 3.12 in the
   test matrix for both c3po and r2d2.  Drop Python 3.10 from the c3po matrix
   once ``requires-python`` is bumped to ``>=3.12``.
 
@@ -1476,10 +1805,12 @@ the control loop and teleop now continue unaffected:
 | Phase 13 (LeRobot v0.6.0 bump) | — | — |
 | Phase 14 (ReBot B601-DM) | — | 18 (4 skipped) |
 | Phase 15 (Controller architecture) | 3 | 27 |
-| Phase 16 (Franka) | — | — (planned) |
-| Phase 17 (ZED) | — | — (planned) |
-| Phase 18 (c3po dataset parser) | — (planned) | — |
-| **Running total** | **137 (2 skipped)** | **121 (5 skipped, 0 failures)** |
+| Phase 16 (Franka) | --- | 16 ✅ (hardware-verified, Panda srv5) |
+| Phase 17 (Robotiq gripper) | — | 24 ✅ |
+| Phase 18 (ZED) | — | — (planned) |
+| Phase 19 (DROID alignment) | — | — (planned) |
+| Phase 20 (c3po dataset parser) | — (planned) | — |
+| **Running total** | **137 (2 skipped)** | **161 (5 skipped, 0 failures)** |
 
 ---
 
@@ -1513,4 +1844,9 @@ the control loop and teleop now continue unaffected:
 | Manifest-driven capabilities (`controller_capabilities`) | ✅ |
 | Auto-reset (leader → home on connect) | ✅ (hardware-verified on SO-101) |
 | Haptic feedback stub (`.current` → `send_feedback`) | ✅ (stub, gates on capability) |
-| No-camera station config (`so101.nocam.yaml`) | ✅ |
+| No-camera station config | ✅ |
+| Franka Panda teleop (JointMotion, 10 Hz sinusoidal) | ✅ (hardware-verified, error ~0.04 rad RMS, no accumulation) |
+| Franka Panda config + launch script | ✅ (server v5, libfranka 0.9.2, PREEMPT_RT on NUC) |
+| Franka Panda Docker integration (franky-control + setcap) | ✅ |
+| Gripper-optional connect (third-party gripper support) | ✅ (Robotiq 2F-85 wrapper implemented) |
+| Franka tracking error analysis (test_franka.py) | ✅ (per-joint mean/max/RMS, no error accumulation) |
