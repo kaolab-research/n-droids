@@ -542,43 +542,6 @@ class SpecResponse:
 
 ---
 
-### Recent Robustness Fixes ✅
-
-**Camera failure resilience.**  When a USB camera disconnects mid-session,
-the control loop and teleop now continue unaffected:
-
-- `_NonBlockingCamera.read_latest()` added — delegates to `read()` so
-  `get_observation()` gets the same blank-frame fallback as the camera send
-  loop.  Previously a crashed OpenCV thread would raise `RuntimeError` on
-  every control cycle, locking the follower arm.
-- `get_observation()` error handler rate-limited to 1 log per 5 seconds;
-  sends `camera_error` StatusMessage to c3po.
-- Camera error status rate-limited to 1 per second per camera (was ~200/sec
-  from the 200Hz check loop).
-
-**Recording fixes.**  Several issues discovered during hardware testing:
-
-- `Recording.clear()` now increments `_episode_count` only for non-discarded
-  episodes (checks `rerecord` flag before clearing).  Discarded episodes
-  (`r` key) reuse the same episode number.
-- Keyboard `r` key now also sets `done = True` so the inner teleop loop
-  exits immediately (previously required also pressing `n`).
-- `CancelEpisode` sends `episode_discarded` StatusMessage so c3po logs
-  "Episode discarded — redo from start".
-- Watchdog timer reset on `ResetEpisode` so the user gets the full timeout
-  window to start the next teleop session.
-- `episode_ready` StatusMessage sent after episode finalization:
-  "Episode N ready — begin teleop".
-
-**Spec fixes.**  Runtime introspection improvements:
-
-- `robot.spec()` now drains stale Observations/BinaryFrames before
-  returning the `SpecResponse` (was returning the first queued message).
-- `SpecResponse.__str__()` replaced fixed-width box-drawing table with
-  plain text that adapts to any terminal width.
-
----
-
 ### Phase 12: Dataset forwarding over Ethernet ✅
 
 **Goal**: Get datasets off the NUC and onto the inference machine with zero
@@ -847,174 +810,260 @@ across the handler.
 
 ---
 
-### Phase 16: Lightweight LeRobot v3.0 Dataset Parser (c3po)
+### Phase 16: Franka Panda Support (r2d2)
 
-**Goal**: Let researchers read LeRobot v3.0 datasets (parquet + MP4) without
-installing the full ``lerobot`` package — which pulls PyTorch, HuggingFace Hub,
-and training dependencies.  This directly supports the project's core value
-prop: minimal dependencies on the researcher's machine.
+**Goal**: Support the Franka Panda robot arm for DROID-style data collection.
+The Franka control box has its own internal real-time controller with active
+safety reflexes — r2d2 is purely a setpoint relay at ≤ 50 Hz.
 
-**Design**.  A new ``c3po.data`` submodule (or a standalone ``c3po-datasets``
-entry point) that reads the on-disk format produced by r2d2's
-``DatasetRecorder``.  Dependencies: ``pyarrow`` (already a c3po dependency),
-``av`` or ``opencv-python-headless`` for MP4 decoding.
+**Key design decision — PREEMPT_RT on the NUC.**  After thorough research,
+the recommended library is **`franky`** (TimSchneider42/franky, 355 ★), the
+more modern and actively maintained fork of frankx.  Franky requires a
+PREEMPT_RT kernel on the machine running it — this is a hard requirement of
+libfranka's 1 kHz FCI communication loop and cannot be bypassed with
+``RealtimeConfig::kIgnore`` (which only relaxes thread scheduling, not the
+kernel-level timing guarantees the Franka control box expects).
 
-API sketch:
+**Libfranka version compatibility:** franky ships pre-built wheels for 8
+libfranka versions (0.7.1 through 0.21.2).  Match the version to your
+robot's firmware — check the Franka Desk web interface for the FCI version.
+Franka Research 3 uses libfranka 0.21.2; older Panda robots may use 0.9.2
+or earlier.  franky's wheel archive covers all of them.
 
-```python
-from c3po.data import open_dataset
+**NUC kernel setup — Ubuntu Pro realtime-kernel.**  The NUC runs Ubuntu
+24.04 (see Phase 23 migration).  Enable the real-time kernel:
 
-with open_dataset("session_001") as ds:
-    print(ds.info)         # info.json contents
-    print(ds.stats)        # stats.json contents
-    for episode in ds.episodes():
-        for frame in episode:
-            obs = frame["observation.state"]  # np.ndarray
-            act = frame["action"]             # np.ndarray
-            img = frame["observation.images.front_rgb"]  # np.ndarray (H, W, 3)
+```bash
+sudo pro enable realtime-kernel
+sudo reboot
 ```
 
-The parser is read-only and does not depend on LeRobot's type system or
-``LeRobotDataset`` class.  It should produce plain dicts of numpy arrays
-that are trivially convertible to PyTorch tensors if needed.
+**CUDA + PREEMPT_RT compatibility.**  NVIDIA drivers check for the RT
+kernel and refuse to install by default.  franky documents the workaround:
+set ``IGNORE_PREEMPT_RT_PRESENCE=1`` during CUDA installation.  The ZED
+SDK uses CUDA under the hood — if CUDA works, ZED works.  franky provides
+a script (``tools/install_cuda_realtime.bash``) that automates the full
+CUDA + RT kernel installation.  This is a tested, community-verified
+configuration.
 
-#### Task 16.1: Episode reader — parquet + video (5 tests)
+**Docker considerations.**  Docker containers share the host kernel.
+With PREEMPT_RT on the NUC, franky inside a Docker container inherits
+real-time scheduling.  The container needs ``--cap-add=SYS_NICE`` plus
+``--ulimit rtprio=99 --ulimit memlock=102400`` for the ``realtime`` group
+permissions.  The host must have a ``realtime`` group with the user added.
+
+**Alternative considered — RPyC bridge (net_franky / franky-remote).**
+Both projects split franky across two machines via RPyC: a small RT
+machine runs the franky server, the NUC runs the client.  This avoids
+PREEMPT_RT on the NUC but adds a fourth machine per station and ~1 ms
+of RPC latency.  Rejected in favor of RT on the NUC — simpler,
+cheaper, and the CUDA compatibility concern has a documented fix.
+
+**Alternative considered — Franka Desk API.**  The Desk REST API and
+companion Python wrappers (geriatronics/franka_desk, danielsanjosepro/
+franka_desk_api_client) only handle pre-FCI setup: take control token,
+unlock joints, activate FCI.  Actual motion control **must** go through
+libfranka/FCI — there is no HTTP endpoint for streaming joint
+positions.  The Desk's jogging WebSocket is undocumented and fragile.
+
+**Control mode — joint velocity.**  For 50 Hz teleop streaming, we use
+franky's joint velocity control (``JointVelocityMotion``) rather than
+discrete position moves.  c3po sends joint velocity targets; r2d2
+streams them to franky at the control rate.  This is the natural mapping
+for real-time teleop — no trajectory planning overhead, continuous
+motion, and matches how the SO-101 already works via position deltas.
+
+**Implementation.**  The Franka driver lives inside the vendored LeRobot tree
+(``lerobot/src/lerobot/robots/franka/``), following LeRobot convention exactly.
+The gripper is treated as a separate logical arm (``gripper``, 1 joint) in the
+manifest rather than folded into the 7-DOF arm entry — cleaner introspection
+for the researcher.
+
+**Files to create:**
+
+```
+lerobot/src/lerobot/robots/franka/
+├── __init__.py
+├── config_franka.py          # FrankaRobotConfig (draccus dataclass)
+└── franka_robot.py           # FrankaRobot class
+```
+
+#### Task 16.1: FrankaRobotConfig + registry (2 tests)
+
+**Files**: NEW ``lerobot/src/lerobot/robots/franka/config_franka.py``,
+ADAPT ``r2d2/src/r2d2/_config.py``
+
+- ``FrankaRobotConfig`` dataclass registered as ``"franka"`` in LeRobot's
+  ``RobotConfig`` registry (``@RobotConfig.register_subclass("franka")``).
+- Fields: ``ip`` (control box IP, default ``172.16.0.2``), ``joint_names``
+  (Franka's 7 arm joints), ``cameras``.
+- r2d2 ``_config.py``: add ``"franka"`` to ``_ROBOT_REGISTRY``, lazy import.
+- **Tests**: config parses with IP field, missing IP raises clear error,
+  registry dispatch works.
+
+#### Task 16.2: FrankaRobot driver (5 tests)
+
+**Files**: NEW ``lerobot/src/lerobot/robots/franka/franka_robot.py``
+
+- ``connect()``: instantiate ``franky.Robot(ip)``, call
+  ``recover_from_errors()``, set ``relative_dynamics_factor = 0.1`` for
+  safety.  Initialize ``franky.Gripper(ip)`` as a separate gripper object.
+- ``get_observation()``: read ``robot.current_state`` → extract ``q``
+  (7 joint positions), ``dq`` (7 joint velocities), gripper width from
+  ``gripper.read_once()``.  Return dict with ``{name}.pos`` and
+  ``{name}.vel`` keys for the arm, and a separate ``gripper/joint_position``
+  for the gripper.
+- ``send_action(action)``: extract arm velocity targets from the protocol
+  action dict, call ``robot.move(JointVelocityMotion(velocities))``.
+  Extract gripper width target, call ``gripper.move(width)``.
+  Separate the gripper path so a failed gripper command doesn't block
+  arm motion.
+- ``disconnect()``: close gripper, close robot.  Verify franky's close
+  behaviour triggers a controlled stop (torque remains active but arm
+  holds position).  Idempotent.
+- **Tests**: mock franky for unit tests, observation dict has 7 + 1
+  (gripper) joints, send_action forwards velocity targets correctly,
+  disconnect is idempotent, error recovery on connect.
+
+#### Task 16.3: Station config + launch script (1 test)
+
+**Files**: NEW ``r2d2/config/station.franka.yaml``,
+NEW ``r2d2/launch_scripts/franka.sh``
+
+- YAML config referencing ``ip: 172.16.0.2``, camera configs (likely ZED +
+  RealSense for DROID setup).
+- Launch script with ``--cap-add=SYS_NICE --ulimit rtprio=99
+  --ulimit memlock=102400`` and camera bind-mounts.
+- **Test**: config loads without error.
+
+#### Task 16.4: Dockerfile — franky + PREEMPT_RT integration (no new tests)
+
+**Files**: ADAPT ``r2d2/Dockerfile``
+
+- Add ``franky-control`` to ``pip install`` (matches the robot's libfranka
+  version — use the version-specific wheel archive if needed).
+- Add ``setcap cap_sys_nice+ep /usr/local/bin/python3.12`` so the Python
+  process can request real-time scheduling priority.
+- Document the host pre-requisites in ``network_setup.md``:
+  PREEMPT_RT kernel (``sudo pro enable realtime-kernel``), ``realtime``
+  group, CUDA reinstall with ``IGNORE_PREEMPT_RT_PRESENCE=1``.
+
+---
+
+### Phase 17: Stereolabs ZED Camera Support (r2d2)
+
+**Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
+capture (essential for the DROID setup).  The ZED SDK's internal grabbing
+thread already decouples capture from retrieval, so ``read()`` and
+``read_depth()`` are non-blocking — no adapter wrapper needed beyond
+the existing ``NonBlockingCamera`` (which handles streaming resolution
+downscaling).
+
+**Key design decision:** The implementation follows LeRobot convention —
+a ``ZedCamera`` class + ``ZedCameraConfig`` dataclass live inside the
+vendored LeRobot tree (``lerobot/src/lerobot/cameras/zed/``).  The existing
+binary frame protocol already supports RGB + depth streams natively
+(``RAW_RGB`` + ``RAW_DEPTH`` encodings) — no protocol changes needed.
+
+**USB bandwidth caveat:** ZED cameras use USB 3.0 and consume ~200 MB/s each
+at 1080p.  Two ZEDs on the same USB controller may saturate it.  r2d2's
+existing ``stream_max_height`` config can downscale streaming resolution while
+keeping recording at full res (Phase 9 — already implemented).
+
+**Files to create:**
+
+```
+lerobot/src/lerobot/cameras/zed/
+├── __init__.py
+├── configuration_zed.py      # ZedCameraConfig (draccus dataclass)
+└── zed_camera.py             # ZedCamera class
+```
+
+``ZedCamera`` uses ``pyzed.sl.Camera()`` with ``retrieve_image()`` and
+``retrieve_measure()`` — both non-blocking when the SDK's internal grabbing
+thread is active.  Fits seamlessly into r2d2's existing camera pipeline
+(``NonBlockingCamera`` → ``_camera_send_loop`` → binary frames).
+
+#### Task 17.1: ZedCameraConfig + ZedCamera (3 tests)
+
+**Files**: NEW ``lerobot/src/lerobot/cameras/zed/configuration_zed.py``,
+NEW ``lerobot/src/lerobot/cameras/zed/zed_camera.py``
+
+- ``ZedCameraConfig`` registered via ``@CameraConfig.register_subclass("zed")``.
+  Fields: ``serial_number`` (int or None), ``resolution`` ("HD720" / "HD1080" /
+  "HD2K"), ``fps``, ``publish_depth`` (bool).
+- ``ZedCamera.__init__``: open camera by serial, configure resolution + FPS,
+  start internal grabbing thread.
+- ``read()``: ``cam.grab()`` → ``cam.retrieve_image(sl.VIEW.LEFT)`` → return
+  numpy array (RGBA → RGB slice).  Non-blocking.
+- ``read_depth()``: ``cam.retrieve_measure(sl.MEASURE.DEPTH)`` → return numpy
+  uint16 array in mm.  Returns ``None`` if ``publish_depth=False``.
+- ``close()``: ``cam.close()``, idempotent.
+- **Tests**: mock ZED SDK, read returns correct shape (H, W, 3), read_depth
+  returns uint16, close is idempotent.
+
+#### Task 17.2: Register ZED in r2d2 camera registry (2 tests)
+
+**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
+
+- Add ``"zed"`` to ``_CAMERA_REGISTRY`` (maps to ``ZedCameraConfig``).
+- Import ZED SDK lazily — only when a ZED config is loaded.
+- **Tests**: config parses with serial_number, missing serial defaults to
+  first available camera, ``publish_depth`` defaults to False.
+
+#### Task 17.3: Station config + launch script (1 test)
+
+**Files**: NEW ``r2d2/config/station.franka.zed.yaml``,
+NEW ``r2d2/launch_scripts/franka_zed.sh``
+
+- DROID-style config: Franka arm + 2× ZED (wrist + scene) + optional
+  RealSense for additional views.
+- Launch script bind-mounting ZED USB devices (``/dev/bus/usb``) and
+  config file.
+- **Test**: config loads without error.
+
+---
+
+### Phase 18: Lightweight LeRobot v3.0 Dataset Parser (c3po)
+
+**Goal**: Let researchers read LeRobot v3.0 datasets (parquet + MP4) without
+installing the full ``lerobot`` package.  This directly supports n-droids'
+core value prop: minimal dependencies on the researcher's machine.
+
+**Design**.  A new ``c3po.data`` submodule that reads the on-disk format
+produced by r2d2's ``DatasetRecorder``.  Dependencies: ``pyarrow`` (already a
+c3po dependency), ``av`` or ``opencv-python-headless`` for MP4 decoding.
+
+#### Task 18.1: Episode reader — parquet + video (5 tests)
 
 **Files**: NEW ``c3po/src/c3po/data/__init__.py``, ``c3po/src/c3po/data/_reader.py``
 
 - ``EpisodeReader`` class: opens a chunk directory, reads parquet files in
   episode order, decodes MP4 videos lazily.
-- Index episodes by number without loading all data into memory.
-- Handle depth frames stored as PNG sequences (produced by r2d2 when MP4
-  encoding is not applicable to uint16 data).
-- **Tests**: read single-episode dataset, read multi-episode dataset, video
-  frame count matches parquet frame count, depth PNG sequence decoded
-  correctly, missing video directory handled gracefully.
+- Handle depth frames stored as PNG sequences.
+- **Tests**: read single-episode dataset, video frame count matches parquet
+  frame count, depth PNG sequence, missing video directory handled gracefully.
 
-#### Task 16.2: Dataset metadata — info.json + stats.json (2 tests)
+#### Task 18.2: Dataset metadata — info.json + stats.json (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/_reader.py``
 
 - Parse ``meta/info.json`` and ``meta/stats.json`` into typed dicts.
 - Expose ``fps``, ``robot_type``, ``total_episodes``, ``total_frames``.
-- Expose per-feature statistics (min, max, mean, std) from ``stats.json``.
-- **Tests**: info fields match recorded values, stats contain all expected
-  features, gracefully handles missing stats.json.
+- **Tests**: info fields match, stats contain all expected features.
 
-#### Task 16.3: Public API — ``open_dataset`` context manager (2 tests)
+#### Task 18.3: Public API — ``open_dataset`` context manager (2 tests)
 
 **Files**: ADAPT ``c3po/src/c3po/data/__init__.py``
 
-- ``open_dataset(path)`` returns a ``Dataset`` object with properties:
-  ``info``, ``stats``, ``episodes()`` iterator, ``__len__()`` (episode count).
-- ``Dataset.episodes()`` returns an iterator of ``Episode`` objects.
-- ``Episode`` exposes a ``frames()`` iterator and ``__len__()`` (frame count).
+- ``open_dataset(path)`` returns a ``Dataset`` object with ``info``, ``stats``,
+  ``episodes()`` iterator, ``__len__()``.
 - Each frame is a dict with string keys and numpy array values.
-- **Tests**: context manager opens and closes cleanly, iteration works,
-  frame dict has expected keys, len reports correct counts.
+- **Tests**: context manager clean lifecycle, iteration, frame dict keys, len.
 
 ---
 
-### Phase 17: Franka Panda Support (r2d2)
-
-**Goal**: Support the Franka Panda robot arm using libfranka, following the
-same pattern established for SO-101.  The design is already documented in
-``r2d2/README.md`` §4 "Adding a New Robot" with a complete ``FrankaRobot``
-class skeleton.
-
-**Key design decision**: r2d2 communicates with the Franka control box over
-Ethernet.  The control box runs its own real-time controller; r2d2 is a
-setpoint relay — no PREEMPT_RT kernel required on the NUC.  The arm's
-internal safety reflexes remain fully active.
-
-#### Task 17.1: Register Franka config in r2d2 (2 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
-
-- Add a ``FrankaRobotConfig`` dataclass and register it as ``"franka"`` in
-  ``_ROBOT_REGISTRY``.
-- Minimal fields: ``ip`` (control box IP, default ``172.16.0.2``), camera
-  configs.
-- Import ``franka`` lazily — only when a Franka config is loaded.
-- **Tests**: config parses with IP field, missing IP raises clear error.
-
-#### Task 17.2: FrankaRobot driver (4 tests)
-
-**Files**: NEW ``r2d2/src/r2d2/_robots/franka.py``
-
-- Implement ``FrankaRobot`` following the LeRobot ``Robot`` interface:
-  ``connect()``, ``get_observation()``, ``send_action()``, ``disconnect()``.
-- ``connect(calibrate=True)``: instantiate ``franka.Robot``, set default
-  behavior (collision reflexes, joint limits).
-- ``get_observation()``: read joint positions + velocities from
-  ``robot.read_once()``.  Camera frames are returned by LeRobot's camera
-  layer (not Franka-specific).
-- ``send_action(action)``: call ``robot.set_joint_positions()`` with the
-  flattened position array.
-- ``disconnect()``: close the Franka connection, disconnect cameras.
-- **Tests**: mock libfranka for unit tests, observation dict has expected
-  keys, send_action passes through to mock, disconnect is idempotent.
-
-#### Task 17.3: Station config + launch script (1 test)
-
-**Files**: NEW ``r2d2/config/station.franka.yaml``, NEW
-``r2d2/launch_scripts/franka.sh``
-
-- YAML config referencing the Franka control box IP and camera configs.
-- Launch script bind-mounting cameras and the config file.
-- **Test**: config loads without error.
-
----
-
-### Phase 18: Stereolabs ZED Camera Support (r2d2)
-
-**Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
-capture.  The ZED is already listed in the supported hardware table.
-
-**Key design decision**: The ZED SDK must be installed in the Docker image.
-The existing binary frame protocol already supports RGB + depth streams
-natively (``RAW_RGB`` + ``RAW_DEPTH`` encodings) — no protocol changes needed.
-The ``_NonBlockingCamera`` wrapper handles the LeRobot/OpenCV camera interface;
-a ZED camera would need a similar adapter that reads from the ZED SDK's
-background capture thread.
-
-#### Task 18.1: ZedCamera wrapper (3 tests)
-
-**Files**: NEW ``r2d2/src/r2d2/_cameras/zed.py``
-
-- Implement a ``ZedCamera`` class that wraps the ZED SDK:
-  - ``__init__``: open the camera by serial number, configure resolution +
-    FPS, start the ZED SDK's internal capture thread.
-  - ``read()``: return the latest RGB frame as a numpy array (non-blocking).
-  - ``read_depth()``: return the latest depth map as a numpy uint16 array.
-  - ``close()``: stop capture and release the camera.
-- The ZED SDK's ``retrieve_image()`` / ``retrieve_measure()`` calls are
-  already non-blocking when using the SDK's internal grabbing thread.
-- **Tests**: mock ZED SDK for unit tests, read returns correct shape,
-  read_depth returns uint16, close is idempotent.
-
-#### Task 18.2: Register ZED in camera registry (2 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_config.py``
-
-- Add ``"zed"`` to ``_CAMERA_REGISTRY`` with a ``ZedCameraConfig`` dataclass.
-- Fields: ``serial`` (serial number string), ``width``, ``height``, ``fps``,
-  ``publish_depth`` (bool).
-- Import ZED SDK lazily.
-- **Tests**: config parses with serial, missing serial raises clear error,
-  publish_depth defaults to False.
-
-#### Task 18.3: Station config + launch script (1 test)
-
-**Files**: NEW ``r2d2/config/station.so101.zed.yaml`` or similar.
-
-- Reference config using a ZED as the wrist camera.
-- Launch script bind-mounting the ZED USB device.
-- **Test**: config loads without error.
-
----
-
-### Phase 19: c3po Live View (optional)
+### Phase 19: c3po Live View (tabled)
 
 **Goal**: A lightweight popup window showing live camera feeds and joint
 torque plots during teleop data collection.  Helps the operator see what the
@@ -1156,6 +1205,263 @@ pressing ``q``.  No upload logic on c3po.
 
 ---
 
+### Phase 21: Remote Lab Server as Inference Machine (design tabled)
+
+**Goal**: Support running c3po on a lab server (not physically cabled to the
+NUC) for large policy inference that doesn't fit on a laptop.  The protocol is
+TCP/WebSocket over IP — it's network-agnostic by design, so no code changes
+are needed.  The decision is purely operational.
+
+**Latency analysis.**  On a same-rack lab network, RTT is 1–2 ms — negligible
+at 50 Hz (2.5–10% of a 20 ms cycle).  The NUC's control loop runs
+independently; network latency only affects when c3po's ``step()`` returns.
+For cross-campus or WAN links (>20 ms RTT), direct teleop becomes unusable,
+but policy rollouts with buffered actions could still work.
+
+**Three options documented (decision deferred):**
+
+| | Option A: Single-homed | Option B: Dual-homed (rec.) | Option C: Multi-IP |
+|---|---|---|---|
+| NUC config | One Ethernet port on lab network (static IP e.g. ``192.168.1.50``) | Primary port on lab network + USB Ethernet adapter for direct-connect (``10.42.0.1``) | Same as A, but also assign ``10.42.0.1`` as a secondary IP on the same interface |
+| Direct cable access | ❌ (lab network required) | ✅ (both paths available) | ✅ (temporary, assign ``10.42.0.2`` on researcher's machine) |
+| Setup effort | Minimal | Moderate (USB adapter + netplan) | Low (``ip addr add``, same as current) |
+| Best for | Pure remote use, no walk-up researchers | Mixed-use lab (some remote, some direct) | Quick remote access with direct fallback |
+
+**Future additions (when selected):**
+
+- WebSocket keepalive (ping/pong at 5 s intervals) — prevents silent TCP
+  drops on shared networks.  ``websockets`` library supports this natively.
+- Auto-reconnection in c3po with exponential backoff (1s → 2s → 4s → max 30s).
+  On reconnect, re-send ``DescribeRequest`` and resume recording state.
+- Firewall guidance: restrict port 9090 to lab server IP range.  Never expose
+  to the internet.
+
+---
+
+### Phase 22: Operational Maturity Roadmap (tabled)
+
+**Goal**: Transform N-Droids from a solo-developer research prototype into a
+maintainable, collaborative-grade software project.  Items are prioritized by
+impact-to-effort ratio.  Everything below is deferred — the immediate priority
+is Franka + ZED support for the DROID project.
+
+#### 22.1: CI/CD Pipeline (GitHub Actions) — highest priority
+
+**Why**: 257 tests with zero automation.  Every change is tested manually on
+one machine.  A CI pipeline catches regressions before they reach hardware.
+
+**How**: ``.github/workflows/ci.yml`` with three jobs:
+
+1. **Lint** — ``uv run ruff check`` + ``uv run ruff format --check`` on both repos
+2. **Test c3po** — ``uv run pytest tests/ -v`` (135 tests, ~30 s)
+3. **Test r2d2** — ``uv run pytest tests/ -v`` (121 tests, ~30 s, skip LeRobot
+   import tests in CI)
+4. **Docker build** — ``docker build -t r2d2:ci .`` catches Dockerfile regressions
+
+Uses ``astral-sh/setup-uv@v5`` for zero-config ``uv`` caching.  Estimated
+setup time: 1–2 hours.
+
+#### 22.2: Protocol de-duplication — high priority
+
+**Why**: ``_protocol.py`` (344 lines) is manually duplicated in both repos.
+Divergence causes silent incompatibility — a time bomb for a two-process
+communication system.
+
+**How**: Extract to a tiny ``n-droids-protocol`` package (zero dependencies,
+stdlib only).  Both c3po and r2d2 depend on it via ``pip install``.  The
+protocol can be versioned independently (bump 1.0 → 1.1 when adding a new
+message type).  For local development, use ``uv``'s path dependency:
+
+```toml
+[tool.uv.sources]
+n-droids-protocol = { path = "../n-droids-protocol", editable = true }
+```
+
+#### 22.3: Linting & Formatting (Ruff) — high priority
+
+**Why**: Consistent style catches real bugs (unused imports, undefined names,
+mutable defaults).  Ruff is fast (Rust) and replaces a dozen tools.
+
+**How**: Add ``[tool.ruff]`` to each ``pyproject.toml`` with rules for
+pycodestyle, pyflakes, isort, pyupgrade, bugbear, comprehensions, and
+simplify.  Run ``uv run ruff check . --fix`` once, then enforce in CI.
+
+#### 22.4: Pre-commit Hooks — medium priority
+
+**Why**: Catches issues before they're committed (trailing whitespace, YAML
+syntax errors, accidentally committed secrets).  Prevents the "CI is red →
+fix → push again" loop.
+
+**How**: ``.pre-commit-config.yaml`` with ruff, trailing-whitespace,
+end-of-file-fixer, check-yaml, check-toml, detect-private-key.
+
+#### 22.5: Type Checking (Mypy) — medium priority
+
+**Why**: The protocol layer is a contract between two processes.  A type error
+means garbled messages, not a clean exception.
+
+**How**: Start gradual — strict mode on ``_protocol``, ``_safety``, ``_utils``,
+and ``exceptions`` modules.  Loose mode on everything else.  Add
+``[tool.mypy]`` to ``pyproject.toml``.
+
+#### 22.6: Docker Image CI + Container Registry — medium priority
+
+**Why**: The Dockerfile clones LeRobot from GitHub and applies patches.  If the
+repo moves or patches stop applying cleanly, the image silently fails to build.
+
+**How**: Add a Docker build job to CI (above).  Push built images to GitHub
+Container Registry (GHCR) on main branch pushes.
+
+#### 22.7: Dependency Update Automation — low priority
+
+**Why**: Dependencies ship security patches.  Automated PRs let you review
+and merge on your schedule.
+
+**How**: Enable Dependabot on GitHub (Settings → Code security → Dependabot),
+or add ``.github/dependabot.yml``.  Dependabot supports ``uv.lock`` natively.
+
+#### 22.8: Conventional Commits + Auto-Changelog — low priority
+
+**Why**: When c3po is published to PyPI, users need to know what changed.
+Manual changelogs are always forgotten.
+
+**How**: Adopt Conventional Commits (``feat:``, ``fix:``, ``docs:``) for commit
+messages.  Use ``commitizen`` to auto-bump versions and generate
+``CHANGELOG.md``.
+
+---
+
+### Phase 23: Ubuntu 24.04 LTS Migration
+
+**Goal**: Migrate the NUC and all development workflows from Ubuntu 22.04
+LTS to 24.04 LTS (Noble Numbat).  Ubuntu 22.04 enters end-of-standard-support
+in April 2027; franky and ZED SDK ship first-class 24.04 packages now.
+Proactive migration avoids a rush when 22.04 security updates stop.
+
+**Why this matters for n-droids specifically:**
+
+- **franky** ships pre-built wheels tested against Ubuntu 24.04.  While 22.04
+  wheels also exist, 24.04 is the primary target for ongoing development.
+- **ZED SDK 5.x** requires CUDA 12.x, which has better support on 24.04's
+  newer kernel and GCC toolchain.  22.04's default GCC 11 has known issues
+  with certain CUDA 12 features.
+- **PREEMPT_RT kernel** via Ubuntu Pro is available for both 22.04 and 24.04,
+  but 24.04 ships a newer RT kernel (6.8.x-rt vs 5.15.x-rt) with better
+  scheduling latency for the Franka FCI loop.
+- **Python 3.12** is the default in 24.04, matching r2d2's ``requires-python``
+  and the Docker base image.  22.04 defaults to Python 3.10.
+
+#### Task 23.1: NUC OS upgrade (no tests)
+
+**Files**: ``n-droids/network_setup.md``, ``n-droids/usb_setup.md``
+
+- Upgrade the NUC from 22.04 to 24.04.  Recommended path: clean install
+  (``ubuntu-24.04.1-live-server-amd64.iso``) rather than ``do-release-upgrade``.
+  A clean install avoids accumulated cruft from kernel modules, Docker
+  versions, and NVIDIA driver fragments.
+- Re-enable Ubuntu Pro and the real-time kernel:
+
+  ```bash
+  sudo pro attach <token>
+  sudo pro enable realtime-kernel
+  sudo reboot
+  ```
+
+- Re-install NVIDIA drivers + CUDA with the franky-provided RT compatibility
+  script (``install_cuda_realtime.bash``) or manually with
+  ``IGNORE_PREEMPT_RT_PRESENCE=1``.
+- Re-install ZED SDK 5.x — verify cameras enumerate correctly.
+- Re-install Docker Engine (``docker-ce`` from Docker's official repo, not
+  the snap).  Verify ``docker run hello-world``.
+- Re-create the ``realtime`` group and limits (``/etc/security/limits.conf``).
+- Update ``network_setup.md``: interface naming changed between 22.04 and
+  24.04 (``enx*`` predictable names are stable, but netplan syntax differs
+  slightly).  Document the 24.04-specific netplan YAML.
+- Update ``usb_setup.md``: ``/dev/serial/by-path/`` symlinks are kernel-version
+  dependent.  Verify and re-document paths after the upgrade.
+
+#### Task 23.2: Development environment — Python version alignment (no tests)
+
+**Files**: ``r2d2/pyproject.toml``, ``c3po/pyproject.toml``
+
+- r2d2: already ``requires-python = ">=3.12"`` — no change needed.
+- c3po: currently ``requires-python = ">=3.10"``.  Bump to ``>=3.12`` to
+  match r2d2 and the 24.04 system Python.  c3po uses only stdlib, numpy,
+  Pillow, and websocket-client — all support 3.12 with no API changes.
+  Update the c3po ``.python-version`` file if present.
+- Regenerate both ``uv.lock`` files on Python 3.12:
+
+  ```bash
+  cd c3po && uv lock && cd ../r2d2 && uv lock
+  ```
+
+- Run both test suites on Python 3.12 to verify no regressions.
+
+#### Task 23.3: Docker base image bump (no tests)
+
+**Files**: ``r2d2/Dockerfile``
+
+- Change ``FROM python:3.12-slim`` → ``FROM python:3.12-slim-bookworm``
+  (explicitly pin Debian version — ``slim`` tracks the latest stable,
+  currently Bookworm, but explicit is safer for reproducibility).
+- Verify that ``libusb-1.0-0``, ``libglib2.0-0``, ``libgl1``, ``libglfw3``
+  are available at the expected versions in the new base.
+- Verify ``setcap cap_sys_nice+ep`` works in the new image.
+- Build and test the Docker image on the upgraded NUC with ``docker build -t
+  r2d2:latest . && docker run --rm r2d2:latest --toy``.
+
+#### Task 23.4: CI — add Python 3.12 + 24.04 build matrix (no tests, deferred to Phase 22.1)
+
+- When the CI pipeline is set up (Phase 22.1), include Python 3.12 in the
+  test matrix for both c3po and r2d2.  Drop Python 3.10 from the c3po matrix
+  once ``requires-python`` is bumped to ``>=3.12``.
+
+---
+
+### Recent Robustness Fixes ✅
+
+**Flaky spec test fix (2026-07-30).**  ``test_spec_returns_expected_keys`` in
+``test_server_spec.py`` intermittently failed because ``effective_control_rate``
+was ``0.0`` when the spec was queried before the control loop had completed a
+cycle (empty ``_cycle_durations`` deque).  Fixed by making
+``_send_spec_response`` fall back to ``1.0 / self.period`` (the target rate)
+when no cycles have been measured yet.  All 4 spec tests now pass reliably.
+
+**Camera failure resilience.**  When a USB camera disconnects mid-session,
+the control loop and teleop now continue unaffected:
+
+- `_NonBlockingCamera.read_latest()` added — delegates to `read()` so
+  `get_observation()` gets the same blank-frame fallback as the camera send
+  loop.  Previously a crashed OpenCV thread would raise `RuntimeError` on
+  every control cycle, locking the follower arm.
+- `get_observation()` error handler rate-limited to 1 log per 5 seconds;
+  sends `camera_error` StatusMessage to c3po.
+- Camera error status rate-limited to 1 per second per camera (was ~200/sec
+  from the 200Hz check loop).
+
+**Recording fixes.**  Several issues discovered during hardware testing:
+
+- `Recording.clear()` now increments `_episode_count` only for non-discarded
+  episodes (checks `rerecord` flag before clearing).  Discarded episodes
+  (`r` key) reuse the same episode number.
+- Keyboard `r` key now also sets `done = True` so the inner teleop loop
+  exits immediately (previously required also pressing `n`).
+- `CancelEpisode` sends `episode_discarded` StatusMessage so c3po logs
+  "Episode discarded — redo from start".
+- Watchdog timer reset on `ResetEpisode` so the user gets the full timeout
+  window to start the next teleop session.
+- `episode_ready` StatusMessage sent after episode finalization:
+  "Episode N ready — begin teleop".
+
+**Spec fixes.**  Runtime introspection improvements:
+
+- `robot.spec()` now drains stale Observations/BinaryFrames before
+  returning the `SpecResponse` (was returning the first queued message).
+- `SpecResponse.__str__()` replaced fixed-width box-drawing table with
+  plain text that adapts to any terminal width.
+
+---
+
 ### Test totals
 
 | Phase | c3po | r2d2 |
@@ -1170,7 +1476,10 @@ pressing ``q``.  No upload logic on c3po.
 | Phase 13 (LeRobot v0.6.0 bump) | — | — |
 | Phase 14 (ReBot B601-DM) | — | 18 (4 skipped) |
 | Phase 15 (Controller architecture) | 3 | 27 |
-| **Running total** | **137 (2 skipped)** | **120 (5 skipped, 1 failure)** |
+| Phase 16 (Franka) | — | — (planned) |
+| Phase 17 (ZED) | — | — (planned) |
+| Phase 18 (c3po dataset parser) | — (planned) | — |
+| **Running total** | **137 (2 skipped)** | **121 (5 skipped, 0 failures)** |
 
 ---
 
