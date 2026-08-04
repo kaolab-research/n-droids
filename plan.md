@@ -1098,7 +1098,7 @@ r2d2/tests/test_robotiq.py   # 28 tests
 
 ---
 
-### Phase 18: Stereolabs ZED Camera Support (r2d2)
+### Phase 18: Stereolabs ZED Camera Support (r2d2) ✅ (22 tests)
 
 **Goal**: Support Stereolabs ZED stereo cameras for high-quality RGB + depth
 capture (essential for the DROID setup).  The ZED SDK's internal grabbing
@@ -1816,10 +1816,10 @@ the control loop and teleop now continue unaffected:
 | Phase 15 (Controller architecture) | 3 | 27 |
 | Phase 16 (Franka) | --- | 16 ✅ (hardware-verified, Panda srv5) |
 | Phase 17 (Robotiq gripper) | — | 28 ✅ (hardware-verified) |
-| Phase 18 (ZED) | — | — (planned) |
+| Phase 18 (ZED) | — | 22 ✅ |
 | Phase 19 (DROID alignment) | — | — (planned) |
 | Phase 20 (c3po dataset parser) | — (planned) | — |
-| **Running total** | **137 (2 skipped)** | **165 (5 skipped, 0 failures)** |
+| **Running total** | **137 (2 skipped)** | **187 (5 skipped, 0 failures)** |
 
 ---
 

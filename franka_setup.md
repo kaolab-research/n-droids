@@ -92,6 +92,68 @@ If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
    If you need to change the device ID, edit ``station.franka.robotiq.yaml``
    and set ``gripper.device_id``.
 
+### ZED stereo cameras (optional)
+
+If you are using ZED stereo cameras for the DROID-style setup:
+
+1. **Install CUDA on the RT kernel** (if not already done above for Franka).
+   The ZED SDK requires CUDA for depth computation:
+
+   ```bash
+   wget https://raw.githubusercontent.com/timschneider42/franky/master/tools/install_cuda_realtime.bash
+   chmod +x install_cuda_realtime.bash
+   sudo IGNORE_PREEMPT_RT_PRESENCE=1 bash install_cuda_realtime.bash
+   ```
+
+2. **Install the ZED SDK** on the host.  Download the `.run` installer for
+   your Ubuntu version from https://www.stereolabs.com/developers/release/:
+
+   ```bash
+   # For Ubuntu 22.04 + CUDA 12.1 + ZED SDK 5.1:
+   wget https://download.stereolabs.com/zedsdk/5.1/ZED_SDK_Ubuntu22_cuda12.1.run
+   chmod +x ZED_SDK_Ubuntu22_cuda12.1.run
+   ./ZED_SDK_Ubuntu22_cuda12.1.run -- silent skip_od_model_download
+   ```
+
+   The SDK installs to ``/usr/local/zed/``.  The Docker container volume-mounts
+   ``/usr/local/zed/lib/`` at runtime --- the ``.so`` files live on the host,
+   not in the image.
+
+3. **Find your camera serial numbers**:
+
+   ```bash
+   python3 -c "import pyzed.sl as sl; devices = sl.Camera.get_device_list(); \
+       [print(f'  {d.serial_number}  {d.camera_model}') for d in devices]"
+   ```
+
+   Add the serial numbers to ``station.franka.zed.yaml`` to guarantee which
+   camera is wrist vs. scene.
+
+4. **Verify**:
+
+   ```bash
+   python3 -c "import pyzed.sl as sl; print(sl.Camera.get_device_list())"
+   # Should list your connected ZED cameras.
+   ```
+
+If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
+
+1. Connect the gripper's USB cable to any USB port on the NUC.
+2. Find the device path:
+
+   ```bash
+   ls -l /dev/serial/by-path/
+   # Example output:
+   # pci-0000:80:14.0-usb-0:1:1.0-port0 -> ../../ttyUSB0
+   ```
+
+3. No special driver needed — pyrobotiqgripper communicates over Modbus
+   RTU via the USB serial port and is installed inside the Docker container.
+   The default Modbus device ID is 9 (standard for Robotiq grippers).
+
+   If you need to change the device ID, edit ``station.franka.robotiq.yaml``
+   and set ``gripper.device_id``.
+
 ---
 
 ## 3. Per-Session Startup
