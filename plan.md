@@ -958,36 +958,52 @@ NEW ``r2d2/launch_scripts/franka.sh``
 
 ---
 
-### Phase 17: Robotiq 2F-85 Gripper Support (r2d2) ✅ (24 tests)
+### Phase 17: Robotiq 2F-85 Gripper Support (r2d2) ✅ (28 tests, hardware-verified)
+
+**Status**: Implemented, tested, and hardware-verified on a Robotiq 2F-85
+gripper (Modbus device ID 9) connected via USB to the NUC.  The gripper
+cycles open/closed via a triangle wave in ``test_franka.py`` alongside the
+arm's sinusoidal motion.  Live state updates and bounded tracking error
+(~0.03 m mean, characteristic of Modbus RTU latency).
 
 **Goal**: Support the Robotiq 2F-85 gripper (connected via USB to the NUC) as an
 alternative to the stock Franka hand.  This is part of the DROID-style setup
 where the original Franka gripper has been physically replaced with a Robotiq
-gripper.  The gripper is exposed through the same manifest and protocol interface
-as the stock Franka hand — a single ``gripper/joint_position`` key in both
-action and observation dictionaries.
+gripper.  The gripper is folded into the follower arm's joint array as the 8th
+element (``panda_finger_joint1``) — same manifest key, same action/observation
+pipeline as the stock hand.
 
-**Key design decision — pyRobotiqGripper.**  After evaluating both
+**Key design decision — pyRobotiqGripper v3.x.**  After evaluating both
 `pyRobotiqGripper`_ (castetsb, 84 ★, MIT) and `2f85-python-driver`_
-(PhilNad, 17 ★, MIT), we selected **pyRobotiqGripper** for three reasons:
+(PhilNad, 17 ★, MIT), we selected **pyRobotiqGripper v3.3.13** for three
+reasons:
 
 1. **Raw bit-level control (0-255)** normalizes cleanly to DROID's [0, 1] range.
    The alternative library uses mm, requiring calibration to convert.
-2. **``realTimePositionMove()`` state machine** designed for 100 Hz control
-   loops — the gripper accepts a target, begins motion, and reports whether
-   it has reached the target on subsequent reads.  Non-blocking and ideal for
-   r2d2's 50 Hz control cycle.
-3. **Eight typed exception classes** (``RobotiqGripperError``,
-   ``RobotiqGripperNotConnectedError``, etc.) for robust fault handling —
-   gripper faults won't crash the arm control loop.
+2. **Non-blocking ``move(position, speed, force, wait=False)``** designed for
+   high-frequency control loops.  The v3.x API replaced the older
+   ``realTimePositionMove`` with a cleaner ``move()`` that accepts ``wait=False``
+   for asynchronous operation.
+3. **Rich status API** — ``position(refreshStatus=False)`` for non-blocking
+   reads, ``objectDetection()`` for grasp detection, typed fault codes — all
+   exposed through a well-documented interface.
+
+**v3.x API notes.**  The library underwent significant changes between v2.x
+and v3.x.  Key differences we encountered:
+
+- Constructor: ``RobotiqGripper(com_port=..., device_id=9)`` (was ``serial_number``).
+- Position read: ``position(refreshStatus=False)`` → method returning ``int | None``
+  (was ``getPosition()`` method, then ``position`` property during transition).
+- Move: ``move(position, speed, force, wait=False)`` (was ``realTimePositionMove``).
+- Setup: ``connect()`` must be called before ``activate()``.
 
 .. _pyRobotiqGripper: https://github.com/castetsb/pyRobotiqGripper
 .. _2f85-python-driver: https://github.com/PhilNad/2f85-python-driver
 
-**Dependencies.**  pyRobotiqGripper depends on ``pymodbus`` (Modbus RTU over
-serial for the Robotiq controller), ``numpy``, and ``pyserial``.  All are
-pure Python — no system libraries needed beyond the USB serial port access
-(``/dev/ttyUSB*`` or ``/dev/serial/by-path/*``).
+**Dependencies.**  pyRobotiqGripper v3.3.13 depends on ``pymodbus``, ``numpy``,
+and ``pyserial``.  All are pure Python — no system libraries needed beyond
+USB serial port access (``/dev/ttyUSB0``).  Added ``pyrobotiqgripper`` to the
+Dockerfile ``pip install`` step.
 
 **Normalization.**  The Robotiq gripper reports position as 0-255 bits.
 Following DROID convention, this is normalized to [0, 1] where:
@@ -995,18 +1011,35 @@ Following DROID convention, this is normalized to [0, 1] where:
 - 0.0 = fully open (85 mm)
 - 1.0 = fully closed (0 mm)
 - ``normalized = 1.0 - bits / 255.0``
+- Width in meters: ``width_m = 0.085 * (1.0 - normalized)``
 
-This matches DROID's ``gripper_position`` encoding exactly: 0 = open, 1 = closed.
+This matches DROID's ``gripper_position`` encoding exactly.
 
-**Integration model.**  ``FrankaRobot.connect()`` detects ``gripper.type ==
-"robotiq"`` in the station config and creates a ``RobotiqGripperWrapper``
+**Integration model.**  ``FrankaRobot.connect()`` checks ``gripper.type`` in the
+station config.  When ``"robotiq"``, it creates a ``RobotiqGripperWrapper``
 instead of ``franky.Gripper``.  The wrapper exposes the same interface:
 
-- ``gripper.state.width`` → meters (``0.085 * (1.0 - normalized)``)
-- ``gripper.move(width_m)`` → ``self._drv.move(bits, speed, force, wait=False)``
-- ``gripper.object_detected`` → ``self._drv.object_detected`` (read-only,
-  reports whether the gripper is holding an object — useful for autonomous
-  grasp detection)
+- ``gripper.state.width`` → meters (derived from 0-255 bits)
+- ``gripper.move(width_m)`` → delegates to ``self._drv.move(position=bits, speed=spd, force=fce, wait=False)``
+- ``gripper.object_detected`` → delegates to ``self._drv.objectDetection(refreshStatus=False)``
+
+The gripper appears as ``panda_finger_joint1`` in the manifest's joint list —
+it is the 8th element of ``follower/joint_position`` (after the 7 arm joints).
+``test_franka.py`` detects it by name and drives it with a separate triangle
+wave while the arm joints follow their sinusoidal pattern.
+
+**Draccus compatibility.**  The LeRobot config system (draccus) leaves nested
+YAML blocks as raw ``dict`` objects instead of instantiating the annotated
+``GripperConfig`` dataclass.  The driver handles both forms:
+
+```python
+if isinstance(gripper_cfg, dict):
+    com = gripper_cfg.get("com_port")
+    did = gripper_cfg.get("device_id", 9)
+else:
+    com = getattr(gripper_cfg, "com_port", None)
+    did = getattr(gripper_cfg, "device_id", 9)
+```
 
 **Config format:**
 
@@ -1016,76 +1049,52 @@ robot:
   ip: 172.16.0.2
   gripper:
     type: robotiq
-    device_id: 9
-    speed: 150
-    force: 100
+    device_id: 9        # Modbus device ID (default for Robotiq)
+    com_port: null      # auto-detect; set to "/dev/ttyUSB0" to force
+    speed: 150           # 0-255, higher = faster
+    force: 100           # 0-255, higher = grip harder
 ```
 
-**Normalization.**
-- ``serial_number``: identifies the specific gripper (printed on the device,
-  used by pyRobotiqGripper to differentiate multiple grippers on the same bus).
-  Optional — if omitted, auto-detects the first available gripper.
-- ``speed``: 0-255 (default 150).  Maps to the gripper's internal speed
-  register.  Higher = faster close/open.
-- ``force``: 0-255 (default 100).  Maps to the gripper's internal force
-  register.  0 = minimum grip force, 255 = maximum.
+**Hardware-verified behaviour:**
 
-**Files to create:**
+- Gripper connects and activates on ``connect()`` → ``activate()``.
+- ``move(wait=False)`` sends non-blocking position targets at 50 Hz.
+- ``position(refreshStatus=False)`` returns cached position without a new
+  Modbus read — the status cache is updated by the previous ``move()``
+  which defaults to ``readStatus=True``.
+- Tracking error ~0.03 m mean, ~0.07 m max — bounded by Modbus RTU latency
+  (~10-15 ms/command).  No error accumulation over 30-second runs.
+- Live state updates in ``test_franka.py`` terminal display.
+- ``objectDetection()`` correctly reports 0 (no object) during free motion.
+
+**Implementation.**  The wrapper lives in ``r2d2/src/r2d2/_robotiq/`` as a
+standalone subpackage.  Both the LeRobot-tree driver (``robot_lerobot.py``)
+and the standalone driver (``robot.py``) import it lazily at connect time.
+
+**Files created:**
 
 ```
 r2d2/src/r2d2/_robotiq/
 ├── __init__.py              # Exports RobotiqGripperWrapper
-└── _wrapper.py              # RobotiqGripperWrapper class
+└── _wrapper.py              # RobotiqGripperWrapper class (~150 lines)
+
+r2d2/config/station.franka.robotiq.yaml
+r2d2/launch_scripts/franka_robotiq.sh
+r2d2/tests/test_robotiq.py   # 28 tests
 ```
 
-#### Task 17.1: RobotiqGripperWrapper (4 tests)
+**Files adapted:**
 
-**Files**: NEW ``r2d2/src/r2d2/_robotiq/__init__.py``,
-NEW ``r2d2/src/r2d2/_robotiq/_wrapper.py``
-
-- ``RobotiqGripperWrapper(serial_number, speed, force)``: opens the gripper via
-  ``pyRobotiqGripper.RobotiqGripper(serial_number)``, activates it, sets initial
-  speed and force registers.
-- ``state`` property: returns a namespace with ``.width`` (meters),
-  ``.normalized_position`` ([0, 1]), ``.object_detected`` (bool).
-  Reads ``self._drv.getPosition()`` and ``self._drv.object_detected``.
-- ``move(width_m, speed=None, force=None)``: converts meters → normalized →
-  bits, calls ``self._drv.realTimePositionMove(bits, speed, force)`` with
-  ``wait=False``.  Non-blocking — the gripper motion runs independently.
-- ``close()``: calls ``self._drv.disconnect()``.  Idempotent.
-- **Tests**: open/close/move round-trips with mocked RobotiqGripper, width
-  conversion (0 m → 1.0 normalized, 0.085 m → 0.0 normalized), state returns
-  correct fields, close is idempotent, move with custom speed/force overrides.
-
-#### Task 17.2: Config + FrankaRobot integration (2 tests)
-
-**Files**: ADAPT ``r2d2/src/r2d2/_franka/robot.py``,
-ADAPT ``r2d2/src/r2d2/_franka/config.py``
-
-- Add ``GripperConfig`` dataclass: ``type`` (``"stock"`` | ``"robotiq"``),
-  ``serial_number``, ``speed``, ``force``.
-- ``FrankaRobotConfig`` gains optional ``gripper: GripperConfig`` field.
-  Defaults to ``GripperConfig(type="stock")`` for backward compatibility.
-- ``FrankaRobot.connect()``: if ``gripper.type == "robotiq"``, instantiate
-  ``RobotiqGripperWrapper`` instead of ``franky.Gripper``.  Catch connection
-  failures gracefully — log a warning, set ``self._gripper = None``, continue.
-- **Tests**: config defaults to stock gripper, robotiq config parses correctly,
-  robotiq gripper selected when type="robotiq", stock gripper used when
-  type="stock".
-
-#### Task 17.3: Station config + launch script (1 test)
-
-**Files**: NEW ``r2d2/config/station.franka.robotiq.yaml``,
-NEW ``r2d2/launch_scripts/franka_robotiq.sh``
-
-- YAML config with ``gripper.type: robotiq`` and the specific serial number.
-- Launch script adds ``--device=/dev/ttyUSB*`` (or ``/dev/serial/by-path/*``)
-  to Docker run command for USB serial access.
-- **Test**: config loads without error.
-
-**Files to adapt (Dockerfile):**
-
-- Add ``pymodbus`` to ``pip install`` (pyRobotiqGripper dependency).
+| File | Change |
+|---|---|
+| ``r2d2/src/r2d2/_franka/config.py`` | Added ``GripperConfig`` dataclass (``type``, ``device_id``, ``com_port``, ``speed``, ``force``); ``FrankaRobotConfig`` gains ``gripper`` field |
+| ``r2d2/src/r2d2/_franka/config_lerobot.py`` | Same ``GripperConfig`` + field (self-contained LeRobot copy) |
+| ``r2d2/src/r2d2/_franka/robot.py`` | ``connect()`` dispatches to ``RobotiqGripperWrapper`` when ``gripper.type == "robotiq"``; handles dict-form config (draccus) |
+| ``r2d2/src/r2d2/_franka/robot_lerobot.py`` | Same gripper selection logic (LeRobot-tree copy) |
+| ``r2d2/src/r2d2/_franka/__init__.py`` | Exports ``GripperConfig`` |
+| ``r2d2/Dockerfile`` | Added ``pyrobotiqgripper`` to ``pip install`` |
+| ``n-droids/franka_setup.md`` | Added Robotiq USB setup section + troubleshooting |
+| ``toy-so101/test_franka.py`` | Added gripper detection by joint name, triangle wave driving, live display, error tracking |
 
 ---
 
@@ -1806,11 +1815,11 @@ the control loop and teleop now continue unaffected:
 | Phase 14 (ReBot B601-DM) | — | 18 (4 skipped) |
 | Phase 15 (Controller architecture) | 3 | 27 |
 | Phase 16 (Franka) | --- | 16 ✅ (hardware-verified, Panda srv5) |
-| Phase 17 (Robotiq gripper) | — | 24 ✅ |
+| Phase 17 (Robotiq gripper) | — | 28 ✅ (hardware-verified) |
 | Phase 18 (ZED) | — | — (planned) |
 | Phase 19 (DROID alignment) | — | — (planned) |
 | Phase 20 (c3po dataset parser) | — (planned) | — |
-| **Running total** | **137 (2 skipped)** | **161 (5 skipped, 0 failures)** |
+| **Running total** | **137 (2 skipped)** | **165 (5 skipped, 0 failures)** |
 
 ---
 
@@ -1848,5 +1857,7 @@ the control loop and teleop now continue unaffected:
 | Franka Panda teleop (JointMotion, 10 Hz sinusoidal) | ✅ (hardware-verified, error ~0.04 rad RMS, no accumulation) |
 | Franka Panda config + launch script | ✅ (server v5, libfranka 0.9.2, PREEMPT_RT on NUC) |
 | Franka Panda Docker integration (franky-control + setcap) | ✅ |
-| Gripper-optional connect (third-party gripper support) | ✅ (Robotiq 2F-85 wrapper implemented) |
+| Robotiq 2F-85 gripper connect + activate (pyrobotiqgripper v3.3.13) | ✅ (hardware-verified, device 9, /dev/ttyUSB0) |
+| Robotiq 2F-85 live state + move at 50 Hz | ✅ (hardware-verified, bounded ~0.03 m tracking error) |
+| Robotiq 2F-85 Docker integration (USB serial passthrough) | ✅ |
 | Franka tracking error analysis (test_franka.py) | ✅ (per-joint mean/max/RMS, no error accumulation) |
