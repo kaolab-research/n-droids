@@ -85,11 +85,12 @@ If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
    # pci-0000:80:14.0-usb-0:1:1.0-port0 -> ../../ttyUSB0
    ```
 
-3. Note the serial number printed on the gripper label (`C-51965`).
-   This goes into the station config (see the robotiq launch script).
+3. No special driver needed — pyrobotiqgripper communicates over Modbus
+   RTU via the USB serial port and is installed inside the Docker container.
+   The default Modbus device ID is 9 (standard for Robotiq grippers).
 
-No driver installation is needed --- pyrobotiqgripper communicates over
-USB serial and is installed inside the Docker container.
+   If you need to change the device ID, edit ``station.franka.robotiq.yaml``
+   and set ``gripper.device_id``.
 
 ---
 

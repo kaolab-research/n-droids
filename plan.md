@@ -1016,7 +1016,7 @@ robot:
   ip: 172.16.0.2
   gripper:
     type: robotiq
-    serial_number: "C-51965"
+    device_id: 9
     speed: 150
     force: 100
 ```
@@ -1333,7 +1333,7 @@ robot:
   droids_compatible: true
   gripper:
     type: robotiq
-    serial_number: "C-51965"
+    device_id: 9
     speed: 150
     force: 100
   cameras:
