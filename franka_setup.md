@@ -81,10 +81,11 @@ If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
 
    ```bash
    ls -l /dev/serial/by-path/
-   # Look for something like:  platform-fd500000.pcie-pci-0000:01:00.0-usb-0:1.4:1.0-port0
+   # Example output:
+   # pci-0000:80:14.0-usb-0:1:1.0-port0 -> ../../ttyUSB0
    ```
 
-3. Note the serial number printed on the gripper label (e.g. `C-51965`).
+3. Note the serial number printed on the gripper label (`C-51965`).
    This goes into the station config (see the robotiq launch script).
 
 No driver installation is needed --- pyrobotiqgripper communicates over
