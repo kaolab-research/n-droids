@@ -276,8 +276,8 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | Gripper does not respond to commands | Wrong serial number or Modbus communication failure | Check the serial number on the gripper label; verify `/dev/serial/by-path/` exists inside the container |
 | `ImportError: libcuda.so.1: cannot open shared object file` | NVIDIA Container Toolkit not installed, or container started without `--gpus all` | Install `nvidia-container-toolkit`, restart Docker, and use `launch_scripts/franka_zed.sh` (which passes `--gpus all`) |
 | `docker: ... could not select device driver ... [[gpu]]` | Same as above | Same as above |
-| `libpng16.so.16` / `libgomp.so.1` / `libudev.so.1` missing in Docker logs | System runtime libraries for the ZED SDK missing from the image | Rebuild the image (the Dockerfile installs them) |
-| `libjpeg.so.8: cannot open shared object file` | The ZED SDK is compiled on Ubuntu (libjpeg SONAME 8) while the container is Debian (libjpeg.so.62) | Rebuild the image — the Dockerfile installs `libjpeg62-turbo` and symlinks `libjpeg.so.8` to it |
+| `libpng16.so.16` / `libgomp.so.1` / `libudev.so.1` / `libturbojpeg.so.0` missing in Docker logs | System runtime libraries for the ZED SDK missing from the image | Rebuild the image (the Dockerfile installs them; jpeg/turbojpeg come from Ubuntu packages for symbol-version parity with the SDK) |
+| `libjpeg.so.8: version LIBJPEG_8.0 not found` | The ZED SDK needs Ubuntu's libjpeg-turbo8 (SONAME + symbol versions); Debian's libjpeg62-turbo is not version-compatible | Rebuild the image — the Dockerfile installs Ubuntu's `libjpeg-turbo8` and `libturbojpeg0` packages |
 | Any other `cannot open shared object file` | A library the SDK links is missing inside the container | Run the diagnostic below to list **all** remaining gaps at once (no rebuild needed) |
 | `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
 

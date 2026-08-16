@@ -1987,3 +1987,14 @@ Dockerfile (verified loads in a rebuilt image).  Added a container-view
 listed in one shot without rebuilding; noted that libsl_ai.so's
 `libnvinfer*.so.10 => not found` is normal (lazy-loaded TensorRT modules,
 missing on the host too).
+
+### Follow-up: libjpeg symbol versions + libturbojpeg (2026-08-16)
+
+The container-view ldd showed two remaining ZED load problems: (1) my
+libjpeg.so.8 symlink to Debian's libjpeg.so.62 was insufficient — the
+loader's symbol-version check failed (`version LIBJPEG_8.0 not found`);
+(2) libturbojpeg.so.0 missing.  Debian's libturbojpeg0 Conflicts with
+Ubuntu's libjpeg-turbo8, so the Dockerfile now installs Ubuntu's actual
+`libjpeg-turbo8` (jammy) and `libturbojpeg0` (2.1.5-3ubuntu2) debs from
+archive.ubuntu.com instead of any Debian jpeg packages.  Verified in a
+rebuilt image: ldconfig shows both libs; both dlopen successfully.
