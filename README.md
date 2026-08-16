@@ -161,9 +161,9 @@ Every key in the observation and action dictionaries is mechanically derived fro
 
 Leader arms, gamepads, and other teleoperation devices plug into the NUC. Their state appears in the observation dictionary alongside the follower arms. The protocol treats them identically — the policy decides what to do with the numbers.
 
-### 4.5 No real‑time kernel on the NUC
+### 4.5 No real‑time kernel on the NUC (except Franka)
 
-r2d2 communicates with each robot's internal real‑time controller (Franka control box, Kinova base controller, Feetech servo firmware) over Ethernet or USB‑serial. The NUC is a setpoint relay. No PREEMPT_RT kernel required. Each arm's hardware safety reflexes remain fully active.
+r2d2 communicates with each robot's internal real‑time controller (Franka control box, Kinova base controller, Feetech servo firmware) over Ethernet or USB‑serial. The NUC is a setpoint relay. For the SO‑101, ReBot, and most arms no PREEMPT_RT kernel is required. **Exception:** the Franka Panda's libfranka FCI link requires a PREEMPT_RT kernel on the NUC — see `franka_setup.md`. Each arm's hardware safety reflexes remain fully active.
 
 ### 4.6 Recording is server‑side, format is community‑standard
 

@@ -136,24 +136,6 @@ If you are using ZED stereo cameras for the DROID-style setup:
    # Should list your connected ZED cameras.
    ```
 
-If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
-
-1. Connect the gripper's USB cable to any USB port on the NUC.
-2. Find the device path:
-
-   ```bash
-   ls -l /dev/serial/by-path/
-   # Example output:
-   # pci-0000:80:14.0-usb-0:1:1.0-port0 -> ../../ttyUSB0
-   ```
-
-3. No special driver needed — pyrobotiqgripper communicates over Modbus
-   RTU via the USB serial port and is installed inside the Docker container.
-   The default Modbus device ID is 9 (standard for Robotiq grippers).
-
-   If you need to change the device ID, edit ``station.franka.robotiq.yaml``
-   and set ``gripper.device_id``.
-
 ---
 
 ## 3. Per-Session Startup

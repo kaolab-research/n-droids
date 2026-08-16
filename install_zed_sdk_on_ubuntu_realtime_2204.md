@@ -68,14 +68,18 @@ chmod +x ZED_SDK_Ubuntu22_v*.run
 
 ## Step 5: Manually Deploy the CUDA Toolkit Archive
 
-To prevent package conflicts, pull the standalone .run file script from the official NVIDIA CUDA Toolkit Archive instead of installing via standard apt repositories.
+To prevent package conflicts, pull the standalone `.run` installer from the official NVIDIA CUDA Toolkit Archive instead of installing via standard apt repositories.
 
 ```bash
-# Fetch the standalone installation runfile
-wget https://nvidia.com
+# 1. Download the runfile installer for your Ubuntu version from the
+#    NVIDIA CUDA Toolkit Archive:
+#    https://developer.nvidia.com/cuda-toolkit-archive
+#    (the example version below matches the nvidia-driver-595-open
+#    driver installed in Step 2)
+CUDA_RUNFILE=cuda_13.2.0_595.84_linux.run
 
-# Execute the runfile setup script
-sudo sh cuda_13.2.0_595.84_linux.run
+# 2. Execute the runfile setup script
+sudo sh "$CUDA_RUNFILE"
 ```
 
 

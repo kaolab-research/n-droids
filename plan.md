@@ -1861,3 +1861,70 @@ the control loop and teleop now continue unaffected:
 | Robotiq 2F-85 live state + move at 50 Hz | ✅ (hardware-verified, bounded ~0.03 m tracking error) |
 | Robotiq 2F-85 Docker integration (USB serial passthrough) | ✅ |
 | Franka tracking error analysis (test_franka.py) | ✅ (per-joint mean/max/RMS, no error accumulation) |
+
+---
+
+## Phase 26: Audit fixes + third-party plugin architecture (2026-08-16)
+
+Post-audit work: fixed the audited bugs and replaced the
+"copy driver files into the vendored LeRobot tree" Dockerfile hack with
+LeRobot's third-party plugin mechanism.
+
+### Bug fixes
+
+- ZED driver: depth was silently dead end-to-end (the driver never set
+  public `use_rgb`/`use_depth` attributes, and the config field was
+  `publish_depth` instead of LeRobot's `use_depth`).  Renamed the field
+  and fixed the attribute wiring.  Depth dtype fixed: the SDK returns
+  float32 metres via `MEASURE.DEPTH`; the driver now converts to uint16
+  millimetres (invalid pixels → 0, clipped), matching RealSense and the
+  `RAW_DEPTH` wire format.  Tests previously mocked uint16 directly,
+  encoding the wrong assumption — now they test the conversion.
+- Franka driver: removed the double Robotiq instantiation (a leaked
+  Modbus connection), dead `try: pass except:` cleanup blocks, and the
+  standalone/deployed drift (blocking `move()` vs `asynchronous=True`;
+  `current_state` vs `current_joint_positions/velocities`).  Robotiq
+  `close()` is now called on disconnect.  Cameras read via
+  `read_latest()`.
+- Recording: `Configure` mid-recording now updates the recorder fps;
+  `stats.json` aggregates all chunks (was chunk-000 only); info.json
+  totals/total_chunks refreshed at finalize.
+- Server: failed/absent describe handshakes now close the connection;
+  `smoke_test.py` used the wrong obs key (`joint_position` → toy arm
+  key) and is fixed; stale `recording_stopped` TODO removed (the path
+  works; test re-enabled).
+- Watchdog: docstrings now state honestly that it is a monitoring alarm,
+  not a stop mechanism.
+- Deleted the stale `utils-no-torch.patch` and `__init___lerobot.py`.
+- Docs: c3po README (`Recording`/`wait_until_any`, rate param), toy-so101
+  README KBD_STEP default, controller-less guards in teleop/record,
+  n-droids README PREEMPT_RT caveat for Franka, duplicated Robotiq
+  section removed, ZED install guide bogus `wget https://nvidia.com`
+  fixed, r2d2 README tree/§4/§5 updated.
+- Dockerfile: pinned the franky wheel bundle URL to release v1.1.4
+  ("latest" no longer ships the libfranka_0-9-2 zip); added .dockerignore.
+
+### Plugin architecture
+
+The Franka robot, ZED camera, and Robotiq gripper drivers moved out of
+`r2d2/src/r2d2/_franka|_zed|_robotiq` into two installable third-party
+LeRobot plugin packages:
+
+```
+plugins/lerobot_robot_franka/   # FrankaRobot + GripperConfig + Robotiq wrapper
+plugins/lerobot_camera_zed/     # ZedCamera + ZedCameraConfig
+```
+
+Each is a single source of truth per device (no standalone/registered
+duplication).  The driver classes fall back to a plain-object base when
+LeRobot isn't importable so unit tests run with mocked SDKs; the config
+modules register via `@RobotConfig.register_subclass("franka")` /
+`@CameraConfig.register_subclass("zed")`, discovered by LeRobot's
+`register_third_party_plugins()`.  The Dockerfile `pip install --no-deps`s
+the plugins (LeRobot comes from PYTHONPATH) instead of COPYing files into
+the vendored tree; r2d2's `_config.py` calls
+`register_third_party_plugins()` and imports the plugin configs.
+
+Test totals after the change: r2d2 121 (+5 skipped) without LeRobot,
+127 (+4 skipped) with a patched LeRobot v0.6.0 on PYTHONPATH; plugins 68
+(+2 skipped) without LeRobot and 83 with; c3po 135 (+2 skipped).
