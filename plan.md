@@ -1953,3 +1953,15 @@ with the RUN step stripping the patch (`${ZED_SDK_VERSION%.*}`) to build the
 wheel URL.  Docs (franka_setup.md, plugin README) updated to match.
 Verified in a rebuilt linux/amd64 image: `pyzed 5.4` installed with the
 cp312 extension; import fails only on the host-mounted `libsl_zed.so`.
+
+### Follow-up: NVIDIA driver libs in the ZED container (2026-08-16)
+
+Next failure on the NUC: `ImportError: libcuda.so.1: cannot open shared
+object file` at `import pyzed.sl`.  The bindings now load (cp312 wheel
+works); the missing piece is the NVIDIA *driver* library, which is not in
+`/usr/local/cuda/lib64` and is normally injected into containers by the
+NVIDIA Container Toolkit.  `franka_zed.sh` now passes `--gpus all` (and
+resolves the host CUDA dir via `readlink -f /usr/local/cuda` for the
+runtime mount).  franka_setup.md gained an nvidia-container-toolkit
+install step + verification command and troubleshooting rows for
+`libcuda.so.1` / `could not select device driver [[gpu]]`.

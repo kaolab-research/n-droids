@@ -105,7 +105,22 @@ If you are using ZED stereo cameras for the DROID-style setup:
    sudo IGNORE_PREEMPT_RT_PRESENCE=1 bash install_cuda_realtime.bash
    ```
 
-2. **Install the ZED SDK** on the host.  Download the `.run` installer for
+2. **Install the NVIDIA Container Toolkit** so the Docker container can use
+   the GPU.  This injects the NVIDIA driver libraries (``libcuda.so.1``,
+   ``libnvidia-ml.so.1``, …) and device nodes into containers started with
+   ``--gpus all``.  Without it, the r2d2 server fails at startup with
+   ``ImportError: libcuda.so.1: cannot open shared object file``:
+
+   ```bash
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+
+   # Verify GPU access from inside a container:
+   sudo docker run --rm --gpus all ubuntu nvidia-smi
+   ```
+
+3. **Install the ZED SDK** on the host.  Download the `.run` installer for
    your Ubuntu version from https://www.stereolabs.com/developers/release/.
    Install the version matching the r2d2 ``Dockerfile``'s
    ``ZED_SDK_VERSION`` build arg (currently **5.4.1**); the exact installer
@@ -118,7 +133,7 @@ If you are using ZED stereo cameras for the DROID-style setup:
    ./ZED_SDK_Ubuntu22_cuda12.1.run -- silent skip_od_model_download
    ```
 
-   The SDK installs to ``/usr/local/zed/``.  Two pieces of the SDK are
+   The SDK installs to ``/usr/local/zed/``.  Three pieces of the SDK are
    needed inside the Docker container:
 
    - The **pyzed Python bindings** are baked into the Docker image as a
@@ -130,6 +145,9 @@ If you are using ZED stereo cameras for the DROID-style setup:
    - The SDK's native ``.so`` libraries (``/usr/local/zed/lib``) and the
      CUDA runtime (``/usr/local/cuda/lib64``) live on the host and are
      volume-mounted by ``launch_scripts/franka_zed.sh``.
+   - The NVIDIA **driver** libraries (``libcuda.so.1`` etc.) and GPU device
+     nodes are injected by the NVIDIA Container Toolkit via the script's
+     ``--gpus all`` flag (installed in step 2 above).
 
    If you upgrade the ZED SDK on the host, rebuild the image with the
    matching version:
@@ -138,7 +156,7 @@ If you are using ZED stereo cameras for the DROID-style setup:
    docker build --build-arg ZED_SDK_VERSION=5.4.1 -t r2d2:latest .
    ```
 
-3. **Find your camera serial numbers**:
+4. **Find your camera serial numbers**:
 
    ```bash
    python3 -c "import pyzed.sl as sl; devices = sl.Camera.get_device_list(); \
@@ -148,7 +166,7 @@ If you are using ZED stereo cameras for the DROID-style setup:
    Add the serial numbers to ``station.franka.zed.yaml`` to guarantee which
    camera is wrist vs. scene.
 
-4. **Verify**:
+5. **Verify**:
 
    ```bash
    python3 -c "import pyzed.sl as sl; print(sl.Camera.get_device_list())"
@@ -256,3 +274,6 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | Gripper not available error (ignored) | Stock Franka hand missing or replaced | The driver skips gripper init for the stock hand — no action needed.  For Robotiq, use the robotiq launch script. |
 | `could not open port` in Docker logs | Robotiq USB device not passed to container | Verify `--device=/dev/ttyUSB0` is in the launch script and the device exists on the host |
 | Gripper does not respond to commands | Wrong serial number or Modbus communication failure | Check the serial number on the gripper label; verify `/dev/serial/by-path/` exists inside the container |
+| `ImportError: libcuda.so.1: cannot open shared object file` | NVIDIA Container Toolkit not installed, or container started without `--gpus all` | Install `nvidia-container-toolkit`, restart Docker, and use `launch_scripts/franka_zed.sh` (which passes `--gpus all`) |
+| `docker: ... could not select device driver ... [[gpu]]` | Same as above | Same as above |
+| `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
