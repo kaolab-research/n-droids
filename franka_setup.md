@@ -106,18 +106,37 @@ If you are using ZED stereo cameras for the DROID-style setup:
    ```
 
 2. **Install the ZED SDK** on the host.  Download the `.run` installer for
-   your Ubuntu version from https://www.stereolabs.com/developers/release/:
+   your Ubuntu version from https://www.stereolabs.com/developers/release/.
+   Install the version matching the r2d2 ``Dockerfile``'s
+   ``ZED_SDK_VERSION`` build arg (currently **5.4.1**); the exact installer
+   filename varies by release, e.g.:
 
    ```bash
-   # For Ubuntu 22.04 + CUDA 12.1 + ZED SDK 5.1:
-   wget https://download.stereolabs.com/zedsdk/5.1/ZED_SDK_Ubuntu22_cuda12.1.run
+   # For Ubuntu 22.04 + CUDA 12.x + ZED SDK 5.4.1 (filename may differ):
+   wget https://download.stereolabs.com/zedsdk/5.4.1/ZED_SDK_Ubuntu22_cuda12.1.run
    chmod +x ZED_SDK_Ubuntu22_cuda12.1.run
    ./ZED_SDK_Ubuntu22_cuda12.1.run -- silent skip_od_model_download
    ```
 
-   The SDK installs to ``/usr/local/zed/``.  The Docker container volume-mounts
-   ``/usr/local/zed/lib/`` at runtime --- the ``.so`` files live on the host,
-   not in the image.
+   The SDK installs to ``/usr/local/zed/``.  Two pieces of the SDK are
+   needed inside the Docker container:
+
+   - The **pyzed Python bindings** are baked into the Docker image as a
+     CPython-3.12 wheel from Stereolabs, version-matched to the host SDK
+     (see ``ZED_SDK_VERSION`` in the r2d2 ``Dockerfile``).  Do **not**
+     volume-mount the host's ``/usr/lib/python3/dist-packages/pyzed`` —
+     it is built for the distro Python (3.10), not for the container's
+     Python 3.12, and will fail with ``ModuleNotFoundError: pyzed.sl``.
+   - The SDK's native ``.so`` libraries (``/usr/local/zed/lib``) and the
+     CUDA runtime (``/usr/local/cuda/lib64``) live on the host and are
+     volume-mounted by ``launch_scripts/franka_zed.sh``.
+
+   If you upgrade the ZED SDK on the host, rebuild the image with the
+   matching version:
+
+   ```bash
+   docker build --build-arg ZED_SDK_VERSION=5.4.1 -t r2d2:latest .
+   ```
 
 3. **Find your camera serial numbers**:
 

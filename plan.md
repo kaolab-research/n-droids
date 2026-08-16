@@ -1928,3 +1928,28 @@ the vendored tree; r2d2's `_config.py` calls
 Test totals after the change: r2d2 121 (+5 skipped) without LeRobot,
 127 (+4 skipped) with a patched LeRobot v0.6.0 on PYTHONPATH; plugins 68
 (+2 skipped) without LeRobot and 83 with; c3po 135 (+2 skipped).
+
+### Follow-up: ZED bindings fix (2026-08-16)
+
+On the DROID NUC, `franka_zed.sh` failed inside the container with
+`ModuleNotFoundError: No module named 'pyzed.sl'`.  Cause: the script
+volume-mounted the host's `/usr/lib/python3/dist-packages/pyzed`, which
+is built for the distro Python 3.10, into the container's Python 3.12
+site-packages — the `sl.cpython-310-*.so` extension doesn't match the
+3.12 ABI tag.  Fix: bake a CPython-3.12 pyzed wheel from Stereolabs
+(`https://download.stereolabs.com/zedsdk/{VER}/whl/linux_x86_64/pyzed-{VER}-cp312-cp312-linux_x86_64.whl`,
+`ZED_SDK_VERSION=5.1` build arg) into the image; the launch script now
+mounts only the native libs (`/usr/local/zed/lib` and `/usr/local/cuda`,
+added to `LD_LIBRARY_PATH`).  Verified in a rebuilt linux/amd64 image:
+`import pyzed.sl` fails only on the missing host `.so` libs, and toy-mode
+E2E still passes.
+
+### Follow-up: ZED SDK 5.4.1 on the NUC (2026-08-16)
+
+The NUC reports ZED SDK 5.4.1.  Stereolabs publishes pyzed wheels per
+SDK *minor* series (no patch wheels): host SDK 5.4.1 uses the `pyzed-5.4`
+wheel under `/zedsdk/5.4/`.  Dockerfile updated: `ARG ZED_SDK_VERSION=5.4.1`
+with the RUN step stripping the patch (`${ZED_SDK_VERSION%.*}`) to build the
+wheel URL.  Docs (franka_setup.md, plugin README) updated to match.
+Verified in a rebuilt linux/amd64 image: `pyzed 5.4` installed with the
+cp312 extension; import fails only on the host-mounted `libsl_zed.so`.
