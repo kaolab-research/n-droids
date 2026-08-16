@@ -1976,3 +1976,14 @@ Stereolabs' official zed-docker 5.X runtime image to the Dockerfile:
 rebuilt image via ldconfig.  franka_setup.md troubleshooting now
 documents the `ldd /usr/local/zed/lib/libsl_zed.so | grep "not found"`
 one-liner for any remaining library gaps.
+
+### Follow-up: libjpeg SONAME shim (2026-08-16)
+
+Next missing link was `libjpeg.so.8` — the ZED SDK is compiled on Ubuntu
+(SONAME 8) while the container base is Debian (libjpeg.so.62).  Added
+`libjpeg62-turbo` + a `libjpeg.so.8 -> libjpeg.so.62` symlink to the
+Dockerfile (verified loads in a rebuilt image).  Added a container-view
+`ldd` diagnostic to franka_setup.md so remaining library gaps can be
+listed in one shot without rebuilding; noted that libsl_ai.so's
+`libnvinfer*.so.10 => not found` is normal (lazy-loaded TensorRT modules,
+missing on the host too).
