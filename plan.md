@@ -1998,3 +1998,12 @@ Ubuntu's libjpeg-turbo8, so the Dockerfile now installs Ubuntu's actual
 `libjpeg-turbo8` (jammy) and `libturbojpeg0` (2.1.5-3ubuntu2) debs from
 archive.ubuntu.com instead of any Debian jpeg packages.  Verified in a
 rebuilt image: ldconfig shows both libs; both dlopen successfully.
+
+### Follow-up: CAMERA STREAM FAILED TO START (2026-08-16)
+
+All container library layers are resolved — the SDK now initializes and
+reaches `sl::Camera::open()`, which fails with CAMERA STREAM FAILED TO
+START (a hardware-access error: exclusive-camera contention, USB 2.0
+bandwidth, or cable/firmware).  Added actionable hints to the driver's
+ConnectionError for that status, plus host-side and container-side
+camera-open bisection diagnostics to franka_setup.md.

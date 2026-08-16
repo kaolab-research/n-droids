@@ -278,6 +278,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | `docker: ... could not select device driver ... [[gpu]]` | Same as above | Same as above |
 | `libpng16.so.16` / `libgomp.so.1` / `libudev.so.1` / `libturbojpeg.so.0` missing in Docker logs | System runtime libraries for the ZED SDK missing from the image | Rebuild the image (the Dockerfile installs them; jpeg/turbojpeg come from Ubuntu packages for symbol-version parity with the SDK) |
 | `libjpeg.so.8: version LIBJPEG_8.0 not found` | The ZED SDK needs Ubuntu's libjpeg-turbo8 (SONAME + symbol versions); Debian's libjpeg62-turbo is not version-compatible | Rebuild the image — the Dockerfile installs Ubuntu's `libjpeg-turbo8` and `libturbojpeg0` packages |
+| `CAMERA STREAM FAILED TO START` in Docker logs | Camera busy in another application, USB 2.0 port/hub, or cable/firmware issue | Run the camera-open diagnostic above (host first, then container) |
 | Any other `cannot open shared object file` | A library the SDK links is missing inside the container | Run the diagnostic below to list **all** remaining gaps at once (no rebuild needed) |
 | `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
 
@@ -298,3 +299,54 @@ Empty output means the SDK libraries will load.  (For reference,
 `libsl_ai.so` legitimately shows `libnvinfer*.so.10 => not found` even on
 the host — those TensorRT AI modules are loaded lazily and are not needed
 for camera streaming.)
+
+### Camera open diagnostic
+
+`CAMERA STREAM FAILED TO START` from `sl::Camera::open()` is a
+hardware-access error, not a library problem.  Bisect host vs container:
+
+**1. Can the camera open on the host?**
+
+```bash
+python3 - <<'EOF'
+import pyzed.sl as sl
+devs = sl.Camera.get_device_list()
+print(len(devs), [(d.serial_number, d.camera_model, d.camera_state) for d in devs])
+init = sl.InitParameters()
+init.camera_resolution = sl.RESOLUTION.HD720
+init.camera_fps = 30
+cam = sl.Camera()
+print("open:", cam.open(init))
+cam.close()
+EOF
+```
+
+If the host open also fails: the camera is busy in another application
+(ZED cameras are exclusive — close ZED_Explorer / any zed process), is on
+a USB 2.0 port or hub (check `lsusb -t` for SuperSpeed / 5000M), or needs
+a replug/firmware update.
+
+**2. If the host works, can the container open it?**
+
+```bash
+docker run --rm --gpus all --entrypoint python \
+  --device=/dev/bus/usb:/dev/bus/usb \
+  -v /usr/local/zed/lib:/usr/local/zed/lib:ro \
+  -v /usr/local/cuda:/usr/local/cuda:ro \
+  -e LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda/lib64 \
+  r2d2:latest - <<'EOF'
+import pyzed.sl as sl
+devs = sl.Camera.get_device_list()
+print(len(devs), [(d.serial_number, d.camera_model, d.camera_state) for d in devs])
+init = sl.InitParameters()
+init.camera_resolution = sl.RESOLUTION.HD720
+init.camera_fps = 30
+cam = sl.Camera()
+print("open:", cam.open(init))
+cam.close()
+EOF
+```
+
+If the container lists 0 cameras, the USB devices aren't passed through —
+verify the `--device=/dev/bus/usb:/dev/bus/usb` mount and compare
+`lsusb` inside and outside the container.
