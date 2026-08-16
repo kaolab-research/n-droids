@@ -1965,3 +1965,14 @@ resolves the host CUDA dir via `readlink -f /usr/local/cuda` for the
 runtime mount).  franka_setup.md gained an nvidia-container-toolkit
 install step + verification command and troubleshooting rows for
 `libcuda.so.1` / `could not select device driver [[gpu]]`.
+
+### Follow-up: ZED system runtime libs (2026-08-16)
+
+After --gpus all fixed `libcuda.so.1`, the next missing link was
+`libpng16.so.16` — a plain system library the python:3.12-slim base
+doesn't ship.  Added the canonical ZED SDK runtime set from
+Stereolabs' official zed-docker 5.X runtime image to the Dockerfile:
+`libpng16-16`, `libgomp1`, `libudev1`.  Verified present in the
+rebuilt image via ldconfig.  franka_setup.md troubleshooting now
+documents the `ldd /usr/local/zed/lib/libsl_zed.so | grep "not found"`
+one-liner for any remaining library gaps.
