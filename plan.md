@@ -2038,3 +2038,11 @@ needs, while the bind mount `-v /dev/bus/usb:/dev/bus/usb` (the pattern
 the proven ReBot/RealSense launch scripts use) does.  franka_zed.sh now
 uses the bind mount + a pre-flight warning if /dev/bus/usb is empty on
 the host; docs and troubleshooting updated.
+
+### Follow-up: --privileged for ZED USB access (2026-08-17)
+
+Bind mounts of /dev/bus/usb (both --device-dir and -v) still left the
+SDK enumerating 0 cameras.  Stereolabs' official Docker docs run ZED
+containers with `--privileged` ("grants the container permission to
+access the camera connected via USB").  franka_zed.sh now passes
+--privileged; diagnostics/troubleshooting updated accordingly.

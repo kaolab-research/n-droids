@@ -281,7 +281,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | `CAMERA STREAM FAILED TO START` in Docker logs | Camera busy in another application, USB 2.0 port/hub, or cable/firmware issue | Run the camera-open diagnostic above (host first, then container); replug the camera's USB cable if a previous open crashed |
 | `CORRUPTED SDK INSTALLATION` / `NEURAL TRT NOT FOUND` (host) | ZED SDK's default NEURAL depth mode requires TensorRT, which the host SDK install lacks | Use `DEPTH_MODE.PERFORMANCE` (the r2d2 driver already does), or re-run the SDK installer with the AI module |
 | `exec /usr/local/bin/python: operation not permitted` | The image's python carries the `cap_sys_nice` file capability (for libfranka), and Linux won't exec it without that capability in the bounding set | Add `--cap-add=SYS_NICE` to the `docker run` (the launch scripts already include it) |
-| Container lists `0` cameras (`get_device_list() -> []`) | USB passthrough not effective | Use the bind mount `-v /dev/bus/usb:/dev/bus/usb` (NOT `--device` with a directory), as `franka_zed.sh` does |
+| Container lists `0` cameras (`get_device_list() -> []`) | ZED USB enumeration needs raw device access | Run the container with `--privileged` (Stereolabs' official recommendation — plain `/dev/bus/usb` mounts are not enough), as `franka_zed.sh` does |
 | Any other `cannot open shared object file` | A library the SDK links is missing inside the container | Run the diagnostic below to list **all** remaining gaps at once (no rebuild needed) |
 | `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
 
@@ -343,8 +343,7 @@ cable before retrying.
 **2. If the host works, can the container open it?**
 
 ```bash
-docker run -i --rm --gpus all --cap-add=SYS_NICE --entrypoint python \
-  -v /dev/bus/usb:/dev/bus/usb \
+docker run -i --rm --privileged --gpus all --cap-add=SYS_NICE --entrypoint python \
   -v /usr/local/zed/lib:/usr/local/zed/lib:ro \
   -v /usr/local/cuda:/usr/local/cuda:ro \
   -e LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda/lib64 \
