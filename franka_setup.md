@@ -278,7 +278,10 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | `docker: ... could not select device driver ... [[gpu]]` | Same as above | Same as above |
 | `libpng16.so.16` / `libgomp.so.1` / `libudev.so.1` / `libturbojpeg.so.0` missing in Docker logs | System runtime libraries for the ZED SDK missing from the image | Rebuild the image (the Dockerfile installs them; jpeg/turbojpeg come from Ubuntu packages for symbol-version parity with the SDK) |
 | `libjpeg.so.8: version LIBJPEG_8.0 not found` | The ZED SDK needs Ubuntu's libjpeg-turbo8 (SONAME + symbol versions); Debian's libjpeg62-turbo is not version-compatible | Rebuild the image — the Dockerfile installs Ubuntu's `libjpeg-turbo8` and `libturbojpeg0` packages |
-| `CAMERA STREAM FAILED TO START` in Docker logs | Camera busy in another application, USB 2.0 port/hub, or cable/firmware issue | Run the camera-open diagnostic above (host first, then container) |
+| `CAMERA STREAM FAILED TO START` in Docker logs | Camera busy in another application, USB 2.0 port/hub, or cable/firmware issue | Run the camera-open diagnostic above (host first, then container); replug the camera's USB cable if a previous open crashed |
+| `CORRUPTED SDK INSTALLATION` / `NEURAL TRT NOT FOUND` (host) | ZED SDK's default NEURAL depth mode requires TensorRT, which the host SDK install lacks | Use `DEPTH_MODE.PERFORMANCE` (the r2d2 driver already does), or re-run the SDK installer with the AI module |
+| `exec /usr/local/bin/python: operation not permitted` | The image's python carries the `cap_sys_nice` file capability (for libfranka), and Linux won't exec it without that capability in the bounding set | Add `--cap-add=SYS_NICE` to the `docker run` (the launch scripts already include it) |
+| Container lists `0` cameras (`get_device_list() -> []`) | USB passthrough not effective | Use the bind mount `-v /dev/bus/usb:/dev/bus/usb` (NOT `--device` with a directory), as `franka_zed.sh` does |
 | Any other `cannot open shared object file` | A library the SDK links is missing inside the container | Run the diagnostic below to list **all** remaining gaps at once (no rebuild needed) |
 | `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
 
@@ -315,22 +318,33 @@ print(len(devs), [(d.serial_number, d.camera_model, d.camera_state) for d in dev
 init = sl.InitParameters()
 init.camera_resolution = sl.RESOLUTION.HD720
 init.camera_fps = 30
+init.depth_mode = sl.DEPTH_MODE.PERFORMANCE  # like the r2d2 driver; avoids TensorRT
 cam = sl.Camera()
 print("open:", cam.open(init))
 cam.close()
 EOF
 ```
 
-If the host open also fails: the camera is busy in another application
-(ZED cameras are exclusive — close ZED_Explorer / any zed process), is on
-a USB 2.0 port or hub (check `lsusb -t` for SuperSpeed / 5000M), or needs
-a replug/firmware update.
+If the host open fails with `CORRUPTED SDK INSTALLATION` /
+`NEURAL TRT NOT FOUND`: the SDK's *default* NEURAL depth mode needs
+TensorRT, which the host SDK install lacks.  The r2d2 driver uses
+`PERFORMANCE` mode (no TensorRT needed) — run the test above with
+`PERFORMANCE` (as written).  If you want NEURAL/AI features on the host
+later, re-run the ZED SDK installer with the AI module (or verify
+`libnvinfer*.so.10` exist under `/usr/local/zed/lib`).
+
+If the host open also fails with `PERFORMANCE`: the camera is busy in
+another application (ZED cameras are exclusive — close ZED_Explorer /
+any zed process), is on a USB 2.0 port or hub (check `lsusb -t` for
+SuperSpeed / 5000M), or needs a replug/firmware update.  A previously
+crashed open (segfault) can leave the camera stuck — replug its USB
+cable before retrying.
 
 **2. If the host works, can the container open it?**
 
 ```bash
-docker run --rm --gpus all --entrypoint python \
-  --device=/dev/bus/usb:/dev/bus/usb \
+docker run -i --rm --gpus all --cap-add=SYS_NICE --entrypoint python \
+  -v /dev/bus/usb:/dev/bus/usb \
   -v /usr/local/zed/lib:/usr/local/zed/lib:ro \
   -v /usr/local/cuda:/usr/local/cuda:ro \
   -e LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda/lib64 \
@@ -341,12 +355,21 @@ print(len(devs), [(d.serial_number, d.camera_model, d.camera_state) for d in dev
 init = sl.InitParameters()
 init.camera_resolution = sl.RESOLUTION.HD720
 init.camera_fps = 30
+init.depth_mode = sl.DEPTH_MODE.PERFORMANCE
 cam = sl.Camera()
 print("open:", cam.open(init))
 cam.close()
 EOF
 ```
 
+(`--cap-add=SYS_NICE` is required for *any* direct `python`/`r2d2-server`
+exec in this image: the python binary carries the `cap_sys_nice` file
+capability for libfranka, and Linux refuses to exec it unless that
+capability is in the container's bounding set.  `franka_zed.sh` already
+passes it — without it you get
+`exec /usr/local/bin/python: operation not permitted`.)
+
 If the container lists 0 cameras, the USB devices aren't passed through —
-verify the `--device=/dev/bus/usb:/dev/bus/usb` mount and compare
-`lsusb` inside and outside the container.
+use the bind mount `-v /dev/bus/usb:/dev/bus/usb` (NOT `--device` with a
+directory, which doesn't grant the cgroup access USB enumeration needs)
+and compare `ls /dev/bus/usb/*/*` inside and outside the container.

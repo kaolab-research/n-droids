@@ -2007,3 +2007,34 @@ START (a hardware-access error: exclusive-camera contention, USB 2.0
 bandwidth, or cable/firmware).  Added actionable hints to the driver's
 ConnectionError for that status, plus host-side and container-side
 camera-open bisection diagnostics to franka_setup.md.
+
+### Follow-up: host-side NEURAL/TensorRT + stuck camera (2026-08-16)
+
+Host diagnostic revealed two things: (1) the host SDK install lacks
+TensorRT, so the SDK's default NEURAL depth mode fails with
+CORRUPTED SDK INSTALLATION (segfault) — the r2d2 driver already uses
+PERFORMANCE mode, which avoids this; (2) the crashed host open can leave
+the camera in a stuck USB state, a likely cause of the container's
+CAMERA STREAM FAILED TO START.  Updated the host diagnostic to use
+PERFORMANCE and documented both failure modes in franka_setup.md.
+
+### Follow-up: SYS_NICE bounding set + host camera OK (2026-08-16)
+
+The "docker test not permitted" was `exec /usr/local/bin/python:
+operation not permitted` — Linux refuses to exec a file with the
+cap_sys_nice file capability unless the capability is in the container's
+bounding set, so bare `docker run --entrypoint python` fails while
+franka_zed.sh (--cap-add=SYS_NICE) works.  Verified on the amd64 image:
+without --cap-add → EPERM, with it → exec OK.  Diagnostics updated.
+Host-side camera open with PERFORMANCE depth mode now succeeds
+("open: SUCCESS"; PERFORMANCE is deprecated in SDK 5.4.1 in favor of
+NEURAL, which needs TensorRT the host lacks — future item, not blocking).
+
+### Follow-up: USB passthrough for ZED enumeration (2026-08-17)
+
+The container diagnostic listed 0 cameras — `--device=/dev/bus/usb:/dev/bus/usb`
+(a directory source) doesn't grant the cgroup access USB enumeration
+needs, while the bind mount `-v /dev/bus/usb:/dev/bus/usb` (the pattern
+the proven ReBot/RealSense launch scripts use) does.  franka_zed.sh now
+uses the bind mount + a pre-flight warning if /dev/bus/usb is empty on
+the host; docs and troubleshooting updated.
