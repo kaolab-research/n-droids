@@ -2057,3 +2057,15 @@ image), and the EEPROM fallback produced an "Invalid calibration file"
 ca-certificates to the image; franka_zed.sh now mounts the host's
 /usr/local/zed/settings (persistent, reuses host-downloaded calibration)
 and sets LC_ALL=C.  Diagnostics/troubleshooting updated.
+
+### Follow-up: station up; arm-motion debugging aid (2026-08-17)
+
+The DROID station now comes up fully in the container (Franka + Robotiq +
+2x ZED + server + c3po over Ethernet; ZED frames saved by the client).
+Remaining: the arm did not move during test_franka.py.  Fixed the
+misleading "Normal for SO-101" overrun log line (now generic) and added
+a one-time INFO log of the first Franka action targets for diagnosis.
+The 25 Hz loop rate is expected with two ZEDs (grab() blocks ~33 ms
+each) — not the motion blocker.  Bisection plan for the user: test with
+station.franka.robotiq.yaml (no cameras), larger amplitude, check the
+client's Target/Actual table, and watch Franka Desk during the run.
