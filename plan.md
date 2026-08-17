@@ -2069,3 +2069,13 @@ The 25 Hz loop rate is expected with two ZEDs (grab() blocks ~33 ms
 each) — not the motion blocker.  Bisection plan for the user: test with
 station.franka.robotiq.yaml (no cameras), larger amplitude, check the
 client's Target/Actual table, and watch Franka Desk during the run.
+
+### Follow-up: ZED camera frames not reaching c3po (2026-08-17)
+
+franka_robotiq works (arm moves), franka_zed fails: c3po reset() times
+out with all 3 camera keys missing while the server logs show cameras
+opened and the control loop streaming joint state — so binary camera
+frames never arrive.  The camera send loop swallowed its exceptions
+silently; instrumented it: send failures now log with tracebacks, first
+frame per camera logs with shape/size, and a 5s heartbeat logs loop
+iterations + per-camera sent counts.  Rebuilt image for the next NUC run.
