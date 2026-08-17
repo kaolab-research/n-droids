@@ -2092,3 +2092,25 @@ depth) and serve non-blocking snapshots from read()/read_latest()/
 read_depth()/read_latest_depth() — the same model as LeRobot's
 RealSenseCamera.  Updated plugin tests (wait-for-frame helpers, thread
 liveness assertions) — 71 plugin + 121 r2d2 tests pass; image rebuilt.
+
+### Follow-up: station fully operational (2026-08-17)
+
+The background-grab-thread redesign fixed the frozen arm: full run
+successful (Franka moving, both ZEDs streaming, Robotiq active).  Log
+analysis: ZED streams at a steady 30 fps per camera (heartbeat counts
+150 frames/5s per camera).  Watchdog lines were the 5 Hz client cadence
+equalling the 200 ms (10-cycle) timeout — benign notification noise.
+Tracking errors (~0.16 rad RMS at ±0.25 rad amplitude) are the 5%
+dynamics velocity cap, not compounding error.  Fixed: test_franka.py
+called spec() after the Robot context closed ([spec unavailable]) — now
+captured inside the with-block; camera-loop ConnectionClosed warnings
+during client disconnect now logged at debug level.
+
+### Follow-up: ZED serial numbers pinned (2026-08-17)
+
+station.franka.zed.yaml now pins camera roles by serial: wrist_zed =
+23474280 (ZED 2, the camera that has been opening with depth), scene_zed
+= 14452055 (ZED-M).  If the physical mounting is the other way around,
+swap the two serial numbers in the config.  Also fixed the outdated ZED
+example in the r2d2 README (serial/publish_depth → serial_number/
+use_depth/resolution).
