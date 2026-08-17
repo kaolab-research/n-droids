@@ -2114,3 +2114,13 @@ station.franka.zed.yaml now pins camera roles by serial: wrist_zed =
 swap the two serial numbers in the config.  Also fixed the outdated ZED
 example in the r2d2 README (serial/publish_depth → serial_number/
 use_depth/resolution).
+
+### Follow-up: clean camera-loop exit on disconnect (2026-08-17)
+
+The remaining "RGB/depth frame send failed" warnings at session end are
+a benign shutdown race: c3po initiates a clean WebSocket close (code
+1000), and the independent 30 fps camera loop races 1-3 more sends
+before the control loop notices and cancels it.  The camera loop now
+returns immediately on ConnectionClosed (instead of warn+break+retry),
+and any other send failure still logs a warning.  r2d2 suite passes;
+image rebuilt — the NUC image must be rebuilt to pick this up.
