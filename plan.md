@@ -2046,3 +2046,14 @@ SDK enumerating 0 cameras.  Stereolabs' official Docker docs run ZED
 containers with `--privileged` ("grants the container permission to
 access the camera connected via USB").  franka_zed.sh now passes
 --privileged; diagnostics/troubleshooting updated accordingly.
+
+### Follow-up: ZED calibration download in container (2026-08-17)
+
+Container now sees both cameras (--privileged fixed USB) and opens them;
+the remaining failure was calibration: the SDK shells out to `curl` to
+download the factory calibration for the camera's serial (not in the
+image), and the EEPROM fallback produced an "Invalid calibration file"
+(plus the SDK's LC_ALL locale warning).  Fixes: added curl +
+ca-certificates to the image; franka_zed.sh now mounts the host's
+/usr/local/zed/settings (persistent, reuses host-downloaded calibration)
+and sets LC_ALL=C.  Diagnostics/troubleshooting updated.

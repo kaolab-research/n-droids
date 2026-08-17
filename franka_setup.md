@@ -282,6 +282,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | `CORRUPTED SDK INSTALLATION` / `NEURAL TRT NOT FOUND` (host) | ZED SDK's default NEURAL depth mode requires TensorRT, which the host SDK install lacks | Use `DEPTH_MODE.PERFORMANCE` (the r2d2 driver already does), or re-run the SDK installer with the AI module |
 | `exec /usr/local/bin/python: operation not permitted` | The image's python carries the `cap_sys_nice` file capability (for libfranka), and Linux won't exec it without that capability in the bounding set | Add `--cap-add=SYS_NICE` to the `docker run` (the launch scripts already include it) |
 | Container lists `0` cameras (`get_device_list() -> []`) | ZED USB enumeration needs raw device access | Run the container with `--privileged` (Stereolabs' official recommendation — plain `/dev/bus/usb` mounts are not enough), as `franka_zed.sh` does |
+| `Invalid calibration file` / `No calibration file ... Downloading ... curl` | Factory calibration download needs `curl` (now in the image) and network; the settings dir should persist | Rebuild the image (includes `curl` + `ca-certificates`), mount `/usr/local/zed/settings` (the script does), and set `LC_ALL=C` — the script does both |
 | Any other `cannot open shared object file` | A library the SDK links is missing inside the container | Run the diagnostic below to list **all** remaining gaps at once (no rebuild needed) |
 | `ImportError: No module named 'pyzed.sl'` | Host pyzed bindings mounted into the container (built for distro Python 3.10, not 3.12) | Remove any `-v .../pyzed` mount; the correct bindings are baked into the image (see the ZED section above) |
 
@@ -345,8 +346,10 @@ cable before retrying.
 ```bash
 docker run -i --rm --privileged --gpus all --cap-add=SYS_NICE --entrypoint python \
   -v /usr/local/zed/lib:/usr/local/zed/lib:ro \
+  -v /usr/local/zed/settings:/usr/local/zed/settings \
   -v /usr/local/cuda:/usr/local/cuda:ro \
   -e LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda/lib64 \
+  -e LC_ALL=C \
   r2d2:latest - <<'EOF'
 import pyzed.sl as sl
 devs = sl.Camera.get_device_list()
