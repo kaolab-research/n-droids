@@ -23,7 +23,9 @@ it never runs the low-level 1 kHz control loop.
 
 ## 2. One-time NUC Setup
 
-The NUC must run **Ubuntu 24.04 LTS**.  Run these commands once.
+The NUC must run **Ubuntu 22.04 LTS** (the current, hardware‑verified
+setup).  An Ubuntu 24.04 migration is planned (plan/phase_25.md) but not
+yet validated.  Run these commands once.
 
 ### Enable the real-time kernel
 

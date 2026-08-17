@@ -1,0 +1,277 @@
+# Phase 26: Audit fixes + third-party plugin architecture (2026-08-16)
+
+Post-audit work: fixed the audited bugs and replaced the
+"copy driver files into the vendored LeRobot tree" Dockerfile hack with
+LeRobot's third-party plugin mechanism.
+
+### Bug fixes
+
+- ZED driver: depth was silently dead end-to-end (the driver never set
+  public `use_rgb`/`use_depth` attributes, and the config field was
+  `publish_depth` instead of LeRobot's `use_depth`).  Renamed the field
+  and fixed the attribute wiring.  Depth dtype fixed: the SDK returns
+  float32 metres via `MEASURE.DEPTH`; the driver now converts to uint16
+  millimetres (invalid pixels → 0, clipped), matching RealSense and the
+  `RAW_DEPTH` wire format.  Tests previously mocked uint16 directly,
+  encoding the wrong assumption — now they test the conversion.
+- Franka driver: removed the double Robotiq instantiation (a leaked
+  Modbus connection), dead `try: pass except:` cleanup blocks, and the
+  standalone/deployed drift (blocking `move()` vs `asynchronous=True`;
+  `current_state` vs `current_joint_positions/velocities`).  Robotiq
+  `close()` is now called on disconnect.  Cameras read via
+  `read_latest()`.
+- Recording: `Configure` mid-recording now updates the recorder fps;
+  `stats.json` aggregates all chunks (was chunk-000 only); info.json
+  totals/total_chunks refreshed at finalize.
+- Server: failed/absent describe handshakes now close the connection;
+  `smoke_test.py` used the wrong obs key (`joint_position` → toy arm
+  key) and is fixed; stale `recording_stopped` TODO removed (the path
+  works; test re-enabled).
+- Watchdog: docstrings now state honestly that it is a monitoring alarm,
+  not a stop mechanism.
+- Deleted the stale `utils-no-torch.patch` and `__init___lerobot.py`.
+- Docs: c3po README (`Recording`/`wait_until_any`, rate param), toy-so101
+  README KBD_STEP default, controller-less guards in teleop/record,
+  n-droids README PREEMPT_RT caveat for Franka, duplicated Robotiq
+  section removed, ZED install guide bogus `wget https://nvidia.com`
+  fixed, r2d2 README tree/§4/§5 updated.
+- Dockerfile: pinned the franky wheel bundle URL to release v1.1.4
+  ("latest" no longer ships the libfranka_0-9-2 zip); added .dockerignore.
+
+### Plugin architecture
+
+The Franka robot, ZED camera, and Robotiq gripper drivers moved out of
+`r2d2/src/r2d2/_franka|_zed|_robotiq` into two installable third-party
+LeRobot plugin packages:
+
+```
+plugins/lerobot_robot_franka/   # FrankaRobot + GripperConfig + Robotiq wrapper
+plugins/lerobot_camera_zed/     # ZedCamera + ZedCameraConfig
+```
+
+Each is a single source of truth per device (no standalone/registered
+duplication).  The driver classes fall back to a plain-object base when
+LeRobot isn't importable so unit tests run with mocked SDKs; the config
+modules register via `@RobotConfig.register_subclass("franka")` /
+`@CameraConfig.register_subclass("zed")`, discovered by LeRobot's
+`register_third_party_plugins()`.  The Dockerfile `pip install --no-deps`s
+the plugins (LeRobot comes from PYTHONPATH) instead of COPYing files into
+the vendored tree; r2d2's `_config.py` calls
+`register_third_party_plugins()` and imports the plugin configs.
+
+Test totals after the change: r2d2 121 (+5 skipped) without LeRobot,
+127 (+4 skipped) with a patched LeRobot v0.6.0 on PYTHONPATH; plugins 68
+(+2 skipped) without LeRobot and 83 with; c3po 135 (+2 skipped).
+
+## Follow-up: ZED bindings fix (2026-08-16)
+
+On the DROID NUC, `franka_zed.sh` failed inside the container with
+`ModuleNotFoundError: No module named 'pyzed.sl'`.  Cause: the script
+volume-mounted the host's `/usr/lib/python3/dist-packages/pyzed`, which
+is built for the distro Python 3.10, into the container's Python 3.12
+site-packages — the `sl.cpython-310-*.so` extension doesn't match the
+3.12 ABI tag.  Fix: bake a CPython-3.12 pyzed wheel from Stereolabs
+(`https://download.stereolabs.com/zedsdk/{VER}/whl/linux_x86_64/pyzed-{VER}-cp312-cp312-linux_x86_64.whl`,
+`ZED_SDK_VERSION=5.1` build arg) into the image; the launch script now
+mounts only the native libs (`/usr/local/zed/lib` and `/usr/local/cuda`,
+added to `LD_LIBRARY_PATH`).  Verified in a rebuilt linux/amd64 image:
+`import pyzed.sl` fails only on the missing host `.so` libs, and toy-mode
+E2E still passes.
+
+## Follow-up: ZED SDK 5.4.1 on the NUC (2026-08-16)
+
+The NUC reports ZED SDK 5.4.1.  Stereolabs publishes pyzed wheels per
+SDK *minor* series (no patch wheels): host SDK 5.4.1 uses the `pyzed-5.4`
+wheel under `/zedsdk/5.4/`.  Dockerfile updated: `ARG ZED_SDK_VERSION=5.4.1`
+with the RUN step stripping the patch (`${ZED_SDK_VERSION%.*}`) to build the
+wheel URL.  Docs (franka_setup.md, plugin README) updated to match.
+Verified in a rebuilt linux/amd64 image: `pyzed 5.4` installed with the
+cp312 extension; import fails only on the host-mounted `libsl_zed.so`.
+
+## Follow-up: NVIDIA driver libs in the ZED container (2026-08-16)
+
+Next failure on the NUC: `ImportError: libcuda.so.1: cannot open shared
+object file` at `import pyzed.sl`.  The bindings now load (cp312 wheel
+works); the missing piece is the NVIDIA *driver* library, which is not in
+`/usr/local/cuda/lib64` and is normally injected into containers by the
+NVIDIA Container Toolkit.  `franka_zed.sh` now passes `--gpus all` (and
+resolves the host CUDA dir via `readlink -f /usr/local/cuda` for the
+runtime mount).  franka_setup.md gained an nvidia-container-toolkit
+install step + verification command and troubleshooting rows for
+`libcuda.so.1` / `could not select device driver [[gpu]]`.
+
+## Follow-up: ZED system runtime libs (2026-08-16)
+
+After --gpus all fixed `libcuda.so.1`, the next missing link was
+`libpng16.so.16` — a plain system library the python:3.12-slim base
+doesn't ship.  Added the canonical ZED SDK runtime set from
+Stereolabs' official zed-docker 5.X runtime image to the Dockerfile:
+`libpng16-16`, `libgomp1`, `libudev1`.  Verified present in the
+rebuilt image via ldconfig.  franka_setup.md troubleshooting now
+documents the `ldd /usr/local/zed/lib/libsl_zed.so | grep "not found"`
+one-liner for any remaining library gaps.
+
+## Follow-up: libjpeg SONAME shim (2026-08-16)
+
+Next missing link was `libjpeg.so.8` — the ZED SDK is compiled on Ubuntu
+(SONAME 8) while the container base is Debian (libjpeg.so.62).  Added
+`libjpeg62-turbo` + a `libjpeg.so.8 -> libjpeg.so.62` symlink to the
+Dockerfile (verified loads in a rebuilt image).  Added a container-view
+`ldd` diagnostic to franka_setup.md so remaining library gaps can be
+listed in one shot without rebuilding; noted that libsl_ai.so's
+`libnvinfer*.so.10 => not found` is normal (lazy-loaded TensorRT modules,
+missing on the host too).
+
+## Follow-up: libjpeg symbol versions + libturbojpeg (2026-08-16)
+
+The container-view ldd showed two remaining ZED load problems: (1) my
+libjpeg.so.8 symlink to Debian's libjpeg.so.62 was insufficient — the
+loader's symbol-version check failed (`version LIBJPEG_8.0 not found`);
+(2) libturbojpeg.so.0 missing.  Debian's libturbojpeg0 Conflicts with
+Ubuntu's libjpeg-turbo8, so the Dockerfile now installs Ubuntu's actual
+`libjpeg-turbo8` (jammy) and `libturbojpeg0` (2.1.5-3ubuntu2) debs from
+archive.ubuntu.com instead of any Debian jpeg packages.  Verified in a
+rebuilt image: ldconfig shows both libs; both dlopen successfully.
+
+## Follow-up: CAMERA STREAM FAILED TO START (2026-08-16)
+
+All container library layers are resolved — the SDK now initializes and
+reaches `sl::Camera::open()`, which fails with CAMERA STREAM FAILED TO
+START (a hardware-access error: exclusive-camera contention, USB 2.0
+bandwidth, or cable/firmware).  Added actionable hints to the driver's
+ConnectionError for that status, plus host-side and container-side
+camera-open bisection diagnostics to franka_setup.md.
+
+## Follow-up: host-side NEURAL/TensorRT + stuck camera (2026-08-16)
+
+Host diagnostic revealed two things: (1) the host SDK install lacks
+TensorRT, so the SDK's default NEURAL depth mode fails with
+CORRUPTED SDK INSTALLATION (segfault) — the r2d2 driver already uses
+PERFORMANCE mode, which avoids this; (2) the crashed host open can leave
+the camera in a stuck USB state, a likely cause of the container's
+CAMERA STREAM FAILED TO START.  Updated the host diagnostic to use
+PERFORMANCE and documented both failure modes in franka_setup.md.
+
+## Follow-up: SYS_NICE bounding set + host camera OK (2026-08-16)
+
+The "docker test not permitted" was `exec /usr/local/bin/python:
+operation not permitted` — Linux refuses to exec a file with the
+cap_sys_nice file capability unless the capability is in the container's
+bounding set, so bare `docker run --entrypoint python` fails while
+franka_zed.sh (--cap-add=SYS_NICE) works.  Verified on the amd64 image:
+without --cap-add → EPERM, with it → exec OK.  Diagnostics updated.
+Host-side camera open with PERFORMANCE depth mode now succeeds
+("open: SUCCESS"; PERFORMANCE is deprecated in SDK 5.4.1 in favor of
+NEURAL, which needs TensorRT the host lacks — future item, not blocking).
+
+## Follow-up: USB passthrough for ZED enumeration (2026-08-17)
+
+The container diagnostic listed 0 cameras — `--device=/dev/bus/usb:/dev/bus/usb`
+(a directory source) doesn't grant the cgroup access USB enumeration
+needs, while the bind mount `-v /dev/bus/usb:/dev/bus/usb` (the pattern
+the proven ReBot/RealSense launch scripts use) does.  franka_zed.sh now
+uses the bind mount + a pre-flight warning if /dev/bus/usb is empty on
+the host; docs and troubleshooting updated.
+
+## Follow-up: --privileged for ZED USB access (2026-08-17)
+
+Bind mounts of /dev/bus/usb (both --device-dir and -v) still left the
+SDK enumerating 0 cameras.  Stereolabs' official Docker docs run ZED
+containers with `--privileged` ("grants the container permission to
+access the camera connected via USB").  franka_zed.sh now passes
+--privileged; diagnostics/troubleshooting updated accordingly.
+
+## Follow-up: ZED calibration download in container (2026-08-17)
+
+Container now sees both cameras (--privileged fixed USB) and opens them;
+the remaining failure was calibration: the SDK shells out to `curl` to
+download the factory calibration for the camera's serial (not in the
+image), and the EEPROM fallback produced an "Invalid calibration file"
+(plus the SDK's LC_ALL locale warning).  Fixes: added curl +
+ca-certificates to the image; franka_zed.sh now mounts the host's
+/usr/local/zed/settings (persistent, reuses host-downloaded calibration)
+and sets LC_ALL=C.  Diagnostics/troubleshooting updated.
+
+## Follow-up: station up; arm-motion debugging aid (2026-08-17)
+
+The DROID station now comes up fully in the container (Franka + Robotiq +
+2x ZED + server + c3po over Ethernet; ZED frames saved by the client).
+Remaining: the arm did not move during test_franka.py.  Fixed the
+misleading "Normal for SO-101" overrun log line (now generic) and added
+a one-time INFO log of the first Franka action targets for diagnosis.
+The 25 Hz loop rate is expected with two ZEDs (grab() blocks ~33 ms
+each) — not the motion blocker.  Bisection plan for the user: test with
+station.franka.robotiq.yaml (no cameras), larger amplitude, check the
+client's Target/Actual table, and watch Franka Desk during the run.
+
+## Follow-up: ZED camera frames not reaching c3po (2026-08-17)
+
+franka_robotiq works (arm moves), franka_zed fails: c3po reset() times
+out with all 3 camera keys missing while the server logs show cameras
+opened and the control loop streaming joint state — so binary camera
+frames never arrive.  The camera send loop swallowed its exceptions
+silently; instrumented it: send failures now log with tracebacks, first
+frame per camera logs with shape/size, and a 5s heartbeat logs loop
+iterations + per-camera sent counts.  Rebuilt image for the next NUC run.
+
+## Follow-up: ZED driver background grab thread (2026-08-17)
+
+Root cause of the frozen arm + bursty observations with cameras: both
+the control loop and the camera send loop called the ZED SDK's blocking
+grab()/retrieve_measure() on the same cameras, stalling the single
+asyncio event loop for seconds at a time (server log showed 28s of
+silence; no heartbeats, no "first action" line).  Redesigned ZedCamera
+to run a dedicated per-camera grab thread (grab → retrieve RGB → retrieve
+depth) and serve non-blocking snapshots from read()/read_latest()/
+read_depth()/read_latest_depth() — the same model as LeRobot's
+RealSenseCamera.  Updated plugin tests (wait-for-frame helpers, thread
+liveness assertions) — 71 plugin + 121 r2d2 tests pass; image rebuilt.
+
+## Follow-up: station fully operational (2026-08-17)
+
+The background-grab-thread redesign fixed the frozen arm: full run
+successful (Franka moving, both ZEDs streaming, Robotiq active).  Log
+analysis: ZED streams at a steady 30 fps per camera (heartbeat counts
+150 frames/5s per camera).  Watchdog lines were the 5 Hz client cadence
+equalling the 200 ms (10-cycle) timeout — benign notification noise.
+Tracking errors (~0.16 rad RMS at ±0.25 rad amplitude) are the 5%
+dynamics velocity cap, not compounding error.  Fixed: test_franka.py
+called spec() after the Robot context closed ([spec unavailable]) — now
+captured inside the with-block; camera-loop ConnectionClosed warnings
+during client disconnect now logged at debug level.
+
+## Follow-up: ZED serial numbers pinned (2026-08-17)
+
+station.franka.zed.yaml now pins camera roles by serial: wrist_zed =
+23474280 (ZED 2, the camera that has been opening with depth), scene_zed
+= 14452055 (ZED-M).  If the physical mounting is the other way around,
+swap the two serial numbers in the config.  Also fixed the outdated ZED
+example in the r2d2 README (serial/publish_depth → serial_number/
+use_depth/resolution).
+
+## Follow-up: clean camera-loop exit on disconnect (2026-08-17)
+
+The remaining "RGB/depth frame send failed" warnings at session end are
+a benign shutdown race: c3po initiates a clean WebSocket close (code
+1000), and the independent 30 fps camera loop races 1-3 more sends
+before the control loop notices and cancels it.  The camera loop now
+returns immediately on ConnectionClosed (instead of warn+break+retry),
+and any other send failure still logs a warning.  r2d2 suite passes;
+image rebuilt — the NUC image must be rebuilt to pick this up.
+
+## Doc + plan sweep (2026-08-17)
+
+- Phase 18 completion notes added (container integration + hardware
+  verification; corrects the phase's wrong "non-blocking ZED" assumption).
+- Phase 19 rewritten against the verified π0.5-DROID contract (verified
+  from the DROID and openpi sources): 15 Hz, 8D action = joint_velocity
+  (7, [-1,1] → ±0.2 rad/step) + gripper_position (1, absolute [0,1]),
+  8D state = joint_position + gripper_position, gripper 1=open, wrist +
+  exterior images, joint-space only (no IK) — replaces the incorrect
+  10D Cartesian draft.
+- Hardware-proven table extended with the session's ZED/plugin/container
+  results.
+- Docs sweep: n-droids README (vendored-tree paragraph, Franka row now
+  hardware-verified), franka_setup.md (Ubuntu 22.04, 24.04 noted as
+  Phase 25), r2d2 README (runtime deps list, removed the unverified
+  "under 400 MB" claim), franka plugin README (com_port note).

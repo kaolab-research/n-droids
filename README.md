@@ -147,7 +147,7 @@ r2d2 records datasets in LeRobot v3.0 format (parquet + MP4 video) natively. c3p
 
 ### 4.1 LeRobot as hardware layer, not as dependency
 
-r2d2 imports LeRobot's robot, camera, and calibration code as a vendored source tree (git submodule) rather than as a pip package. This avoids pulling in LeRobot's PyTorch, HuggingFace Hub, and training dependencies — the server image stays under 400 MB. A single one‑line patch makes `types.py` torch‑optional.
+r2d2 imports LeRobot's robot, camera, and calibration code from a vendored source tree (cloned at the pinned v0.6.0 tag during the Docker build) rather than as a pip package. This avoids pulling in LeRobot's PyTorch, HuggingFace Hub, and training dependencies. Two small patches make `types.py` and `device_utils.py` torch‑optional. Hardware LeRobot itself doesn't support (Franka, ZED) ships as third‑party plugin packages under `plugins/` (see the r2d2 README, §4).
 
 ### 4.2 MDP‑inspired API
 
@@ -217,7 +217,7 @@ Press **n** to end an episode, **r** to re‑record, **q** to stop. That's it.
 | Robot                    | Connection              | Backend                           | Status  |
 | ------------------------ | ----------------------- | --------------------------------- | ------- |
 | SO‑101 (Feetech STS3215) | USB‑serial              | LeRobot `SOFollower`              | ✓       |
-| Franka Panda             | Ethernet to control box | Custom `FrankaRobot` (libfranka)  | planned |
+| Franka Panda             | Ethernet to control box | Custom `FrankaRobot` (franky/libfranka, plugin package)  | ✓ (hardware‑verified) |
 | Kinova Gen3              | Ethernet                | Custom `KinovaRobot` (Kortex API) | planned |
 | ReBot B601‑DM            | CAN bus                 | LeRobot `RebotB601Follower` (native in v0.6.0) | ✓ |
 
