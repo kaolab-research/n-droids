@@ -2079,3 +2079,16 @@ frames never arrive.  The camera send loop swallowed its exceptions
 silently; instrumented it: send failures now log with tracebacks, first
 frame per camera logs with shape/size, and a 5s heartbeat logs loop
 iterations + per-camera sent counts.  Rebuilt image for the next NUC run.
+
+### Follow-up: ZED driver background grab thread (2026-08-17)
+
+Root cause of the frozen arm + bursty observations with cameras: both
+the control loop and the camera send loop called the ZED SDK's blocking
+grab()/retrieve_measure() on the same cameras, stalling the single
+asyncio event loop for seconds at a time (server log showed 28s of
+silence; no heartbeats, no "first action" line).  Redesigned ZedCamera
+to run a dedicated per-camera grab thread (grab → retrieve RGB → retrieve
+depth) and serve non-blocking snapshots from read()/read_latest()/
+read_depth()/read_latest_depth() — the same model as LeRobot's
+RealSenseCamera.  Updated plugin tests (wait-for-frame helpers, thread
+liveness assertions) — 71 plugin + 121 r2d2 tests pass; image rebuilt.
