@@ -89,6 +89,17 @@ If you replaced the stock Franka hand with a Robotiq 2F-85 gripper:
    RTU via the USB serial port and is installed inside the Docker container.
    The default Modbus device ID is 9 (standard for Robotiq grippers).
 
+   The launch scripts map the host device to a stable container-side name
+   ``/dev/robotiq`` (the station configs set ``gripper.com_port`` to it,
+   which makes the gripper connect directly instead of probing every
+   serial port at startup).  For a stable name across reboots, point the
+   script at the by-path symlink found in step 2:
+
+   ```bash
+   ROBOTIQ_DEVICE=/dev/serial/by-path/pci-0000:80:14.0-usb-0:1:1.0-port0 \
+     ./launch_scripts/franka_zed.sh
+   ```
+
    If you need to change the device ID, edit ``station.franka.robotiq.yaml``
    and set ``gripper.device_id``.
 
@@ -272,7 +283,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 | Arm is jerky during teleop | Dynamics factor too high | Lower `relative_dynamics_factor` (currently 0.05 = 5%) |
 | Joints unlock but arm sags | Normal — gravity compensation starts when FCI activates | Activate FCI in Desk |
 | Gripper not available error (ignored) | Stock Franka hand missing or replaced | The driver skips gripper init for the stock hand — no action needed.  For Robotiq, use the robotiq launch script. |
-| `could not open port` in Docker logs | Robotiq USB device not passed to container | Verify `--device=/dev/ttyUSB0` is in the launch script and the device exists on the host |
+| `could not open port` in Docker logs | Robotiq USB device not passed to container | Verify `--device="${ROBOTIQ_DEVICE}:/dev/robotiq"` is in the launch script and the device exists on the host |
 | Gripper does not respond to commands | Wrong serial number or Modbus communication failure | Check the serial number on the gripper label; verify `/dev/serial/by-path/` exists inside the container |
 | `ImportError: libcuda.so.1: cannot open shared object file` | NVIDIA Container Toolkit not installed, or container started without `--gpus all` | Install `nvidia-container-toolkit`, restart Docker, and use `launch_scripts/franka_zed.sh` (which passes `--gpus all`) |
 | `docker: ... could not select device driver ... [[gpu]]` | Same as above | Same as above |
