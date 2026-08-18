@@ -444,7 +444,12 @@ once the stop is released.  Also hardened: ``ZedCamera.connect()``
 closes the SDK handle on open failure and ``disconnect()`` tolerates a
 wedged ``close()``.  Note: the scene ZED ended up stuck at the USB
 level (needs replug / host-side USB reset); the e-stop itself should
-not affect USB cameras — check power wiring if it recurs.
+not affect USB cameras — check power wiring if it recurs.  `usbreset`
+inspection on the NUC shows both ZEDs on USB **bus 004** (same
+controller; the rest of the devices sit on bus 003): the wedge was
+per-device, not bus-wide.  Remedy without replugging:
+`sudo usbreset 2b03:f682` (ZED-M) / `2b03:f780` (ZED 2) — documented in
+franka_setup.md §5.
 
 ## Follow-up: rollout dataset forwarding (2026-08-18)
 
@@ -456,3 +461,17 @@ machine; ``--no-record-download`` opts out.  The ``dataset_ready`` URL
 host is now a ``create_server(http_host=...)`` parameter (default
 ``10.42.0.1``) so the loopback E2E test runs the full
 record → finalize → download path against a real HTTP server.
+
+## Follow-up: NUC dataset cleanup + download host fix (2026-08-19)
+
+NUC is control-only storage: added a ``delete_dataset`` protocol
+message (both copies) and ``Robot.delete_dataset()``; r2d2 refuses
+empty names and in-progress recordings and confirms deletion with a
+``dataset_deleted`` status.  ``policy_rollout.py --record`` now
+downloads to ``--record-dest`` (with ``~`` expansion) and deletes the
+dataset from the NUC after a successful download (``--keep-on-nuc``
+opts out; failures keep the data on the NUC).  Fixed a real download
+bug: c3po followed the advertised URL's host (the station's static IP)
+even when the client reached r2d2 via another address — it now uses the
+client's host and the advertised port.  E2E coverage: record → download
+→ NUC directory gone; refusal while recording; unknown-name ack.

@@ -509,6 +509,21 @@ the server (``create_server(http_host=...)``, default ``10.42.0.1``) so
 the loopback E2E test can exercise the full record → finalize →
 download path over a real HTTP server (r2d2 152 passed/5 skipped).
 
+**NUC-as-control-only follow-up (2026-08-19):** the NUC is control,
+not storage — after a *successful* download the rollout client now
+deletes the dataset from the NUC.  New protocol message
+``delete_dataset`` (both protocol copies) + ``Robot.delete_dataset()``;
+r2d2 refuses empty names and datasets currently being recorded
+(``dataset_delete_refused`` status), otherwise rmtree's in the executor
+and confirms with ``dataset_deleted``.  On download failure the dataset
+stays on the NUC.  Also fixed: c3po's ``download_dataset`` now uses the
+host the client actually reached r2d2 on (advertised URL keeps only its
+port) — previously an advertised ``10.42.0.1`` URL was followed even
+when the client connected via another NIC — and ``--record-dest`` gets
+``~`` expansion.  ``--keep-on-nuc`` opts out of cleanup.  The dataset
+lands at ``<record-dest>/<record-name>/``.  Suites after the change:
+r2d2 154 passed/5 skipped, c3po 141 passed/2 skipped.
+
 ---
 
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)
