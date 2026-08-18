@@ -34,7 +34,7 @@ The plan is split into one file per phase under [`plan/`](plan/).
 | [16](plan/phase_16.md) | Franka Panda Support (16 tests, hardware-verified) | ✅ |
 | [17](plan/phase_17.md) | Robotiq 2F-85 Gripper Support (28 tests, hardware-verified) | ✅ |
 | [18](plan/phase_18.md) | Stereolabs ZED Camera Support (22 tests, hardware-verified) | ✅ |
-| [19](plan/phase_19.md) | π0.5-DROID Policy Interface Alignment | ← NEXT |
+| [19](plan/phase_19.md) | π0.5-DROID Policy Interface Alignment | 🔄 19.1–19.5 ✅, 19.6 pending hardware |
 | [20](plan/phase_20.md) | Lightweight LeRobot v3.0 Dataset Parser (c3po) | planned |
 | [21](plan/phase_21.md) | c3po Live View | tabled |
 | [22](plan/phase_22.md) | BOX Dataset Upload (r2d2) | planned |
@@ -47,17 +47,20 @@ The plan is split into one file per phase under [`plan/`](plan/).
 
 ## Deferred Phases
 
-### Deferred Phases
-
 **Deferred**: HuggingFace Hub and Dropbox upload backends.  These require
 auth tokens (HF_TOKEN, DROPBOX_TOKEN) and the existing HTTP forwarding
 covers the immediate need.  Will be implemented when tokens are available.
 
+**Deferred**: server-side stop on watchdog timeout (r2d2 aborts Franka
+motion instead of only alarming).  The watchdog is currently a
+monitoring alarm — if c3po dies mid-motion the arm finishes the last
+``JointMotion`` and holds.  Physical e-stop and FCI reflexes remain the
+stop mechanism; a software stop is worth adding before long autonomous
+π0.5 rollouts.  Raised by the 2026-08-17 audit.
+
 ---
 
 ## Hardware proven
-
-### Hardware proven
 
 | Feature | Status |
 |---|---|

@@ -28,7 +28,7 @@ The NUC handles all hardware interaction using LeRobot's battle‑tested robot d
 │  │                                 │  │      │  │      obs = robot.step(      │  │
 │  │  Protocol bridge:               │  │      │  │          action)            │  │
 │  │  ├─ JSON control messages       │  │      │  └─────────────────────────────┘  │
-│  │  └─ Binary JPEG camera frames   │  │      │                                   │
+│  │  └─ Binary raw camera frames     │  │      │                                   │
 │  │                                 │  │      │  Dependencies:                    │
 │  │  LeRobot v3.0 dataset writer    │  │      │    numpy, Pillow,                 │
 │  │  (parquet + MP4 video)          │  │      │    websocket-client               │
@@ -47,7 +47,7 @@ The NUC handles all hardware interaction using LeRobot's battle‑tested robot d
 
 **r2d2** owns all hardware interaction. It runs LeRobot's robot drivers, camera backends, calibration workflows, and dataset recording inside a single Docker container. It never runs an AI policy.
 
-**c3po** is a pure‑Python package installable on any OS. It communicates with r2d2 over a single WebSocket connection using a lightweight custom protocol: JSON text frames for control and joint state, binary frames for JPEG‑compressed camera images. No ROS 2, no rosbridge, no DDS.
+**c3po** is a pure‑Python package installable on any OS. It communicates with r2d2 over a single WebSocket connection using a lightweight custom protocol: JSON text frames for control and joint state, binary frames for raw camera pixels (RGB and depth; JPEG in toy mode). No ROS 2, no rosbridge, no DDS.
 
 **Networking** is simple. The NUC's inference Ethernet port is configured with a static IP (`10.42.0.1`). The researcher sets a static IP on the same subnet (`10.42.0.2`), plugs in a cable, and c3po connects to `ws://10.42.0.1:9090`.
 
@@ -77,7 +77,7 @@ The two repos are versioned independently with semantic versioning. Compatibilit
 A single WebSocket connection on port 9090 carries all traffic. Two frame types:
 
 - **Text frames (JSON)** for control — `describe` requests, observation streaming, action commands, recording commands. Joint state is small (~200 bytes per arm at 100 Hz).
-- **Binary frames** for camera images — JPEG‑compressed frames with a small binary header. No base64, no JSON wrapping. A 720p camera at 30 fps produces ~80 KB per frame, fitting comfortably within gigabit Ethernet even with three cameras.
+- **Binary frames** for camera images — raw pixel payloads (``RAW_RGB`` / ``RAW_DEPTH``; JPEG in toy mode) with a small binary header. No base64, no JSON wrapping. A per‑station streaming resolution cap (default 480p) keeps multiple 30 fps camera streams comfortably within gigabit Ethernet.
 
 ### Discovery and manifest
 

@@ -275,3 +275,94 @@ image rebuilt — the NUC image must be rebuilt to pick this up.
   hardware-verified), franka_setup.md (Ubuntu 22.04, 24.04 noted as
   Phase 25), r2d2 README (runtime deps list, removed the unverified
   "under 400 MB" claim), franka plugin README (com_port note).
+
+## Follow-up: audit II + DROID gripper-convention correction (2026-08-17)
+
+Second audit round.  The important catch is a *plan* bug, not a code
+bug: the "gripper is inverted" claim was wrong.
+
+- **DROID gripper convention corrected.**  The previous Phase 19
+  rewrite stated "1 = fully open" and called r2d2's Robotiq
+  ``normalized_position = bits / 255`` inverted.  Re-verified against
+  the code that actually writes and reads DROID data: DROID computes
+  ``gripper_position = 1 - width / max_width`` where ``width`` is the
+  gripper *opening* in metres (fairo/polymetis' Robotiq client —
+  the driver DROID's ``launch_gripper.sh`` starts — returns the opening
+  from ``get_pos()``), and DROID's ``reset()`` commands
+  ``update_gripper(0)`` → ``goto(width = max * (1 - 0))`` = fully open.
+  So **0 = open, 1 = closed**, openpi passes it through unchanged, and
+  our current normalization already matches — the proposed flip would
+  have introduced a real inversion.  Phase 19.1 rewritten: no flip,
+  just an explicit ``droid_gripper_position`` + conversion helpers.
+  No gripper.py behaviour change was made.
+- **Recording metadata honesty (r2d2).**  ``info.json`` declared camera
+  features at the capture resolution with 3 channels while the files on
+  disk were stream-resized frames and 1-channel uint16 depth.  Now
+  declares the recorded resolution and ``[h, w, 1]`` depth; tests added.
+  Native-res recording + depth video format left to Phase 19.5.
+- **ZED wedge surfacing (plugin).**  The grab loop's catch-all kept the
+  thread alive during persistent SDK failure, so reads served stale
+  snapshots forever and the server's ``camera_error`` path never fired.
+  The driver now counts consecutive grab failures and
+  ``read()``/``read_depth()`` raise after 10, which the server's
+  NonBlockingCamera wrapper turns into blank frames + rate-limited
+  ``camera_error`` status; recovers automatically when grabs succeed.
+  Tests added (zed plugin now 38 tests).
+- **Packaging/hygiene.**  Deleted the stale pyc-only
+  ``r2d2/src/r2d2/_franka|_robotiq|_zed`` leftovers from the plugin move;
+  added ``opencv-python-headless`` to r2d2's declared dependencies (it
+  is imported at module load by ``_cameras``/``_server``/``_recording``
+  but was Dockerfile-only); fixed the ``_manifest.py`` "fluent.yaml"
+  docstring; removed the duplicated "Deferred Phases" heading in
+  plan.md.
+- **Docs.**  n-droids/r2d2 READMEs corrected: hardware mode sends raw
+  (not JPEG) camera frames at the capped streaming resolution; the
+  r2d2 "Franka Droid" config example now matches
+  ``config/station.franka.zed.yaml`` and points at the Phase 19
+  ``station.franka.droid.yaml`` variant.  plan.md gained a deferred
+  item: server-side stop on watchdog timeout (r2d2 aborts Franka motion
+  instead of only alarming) before long autonomous π0.5 rollouts.
+- Suites after the fixes: r2d2 123 passed/5 skipped (2 new recording
+  tests), c3po 135 passed/2 skipped (unchanged), zed plugin 38 passed,
+  franka plugin 50 passed.
+
+## Follow-up: Phase 19 implemented test-first (2026-08-17)
+
+Tasks 19.1–19.5 implemented after designing the test suite first
+(tests written red, then the implementation made them green).  Full
+details and the remaining 19.6 hardware steps live in `phase_19.md`
+"Phase 19 implementation notes".  Highlights:
+
+- **Gripper**: `droid_gripper_position` in the Robotiq state namespace
+  + `width_from_droid_position`/`droid_position_from_width` helpers —
+  no normalization flip (DROID is 0 = open, 1 = closed; see the
+  convention correction above).
+- **Franka driver**: `droid_compatible` + `dynamics_factor` config
+  fields; DROID `send_action` (validation → max|v|≤1 normalization →
+  ±0.2 rad deltas → joint-limit clip with reject-and-hold via
+  `ActionRejectedError`); `gripper_position` observation; the gripper
+  leaves the arm's 8-joint position vector in DROID mode.
+- **Server**: hardware manifest extracted to
+  `build_station_manifest()` (DROID arms advertise
+  `command_mode: joint_velocity` + a `gripper` entry); mapping layer
+  gained DROID modes; YAML `control_rate` honored with a 15 Hz clamp
+  in DROID mode; `action_rejected` status on rejected actions;
+  `station.franka.droid.yaml` + `launch_scripts/franka_droid.sh`.
+- **Recording**: `DatasetRecorder` feature groups (named state columns
+  + `actions` concat + image-key rename, float32) matching openpi's
+  converter schema; legacy flat recording unchanged.
+- **c3po**: gripper key appended to `action_keys` and observation
+  keys from the manifest — no other client changes.
+- **toy-so101/test_franka.py**: auto-detects DROID mode (velocity
+  actions, [0,1] gripper, reference integrated with the ±0.2 rad
+  conversion).
+- **Bug found while wiring the with-LeRobot test path**: `_config.py`
+  referenced an undefined `logger` in the plugin-discovery failure
+  branch — would have masked the real error in the container.  Fixed.
+- Test counts after the implementation: r2d2 148 passed/5 skipped
+  (159/4 with a patched LeRobot v0.6.0 on PYTHONPATH — including the
+  previously-skipped config tests); c3po 139 passed/2 skipped;
+  lerobot_robot_franka 77 passed; lerobot_camera_zed 38 passed.
+- Remaining: 19.6 hardware validation (15 Hz tracking,
+  `dynamics_factor` tuning, optional openpi π0.5 rollout), native-res
+  recording, depth video format.
