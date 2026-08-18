@@ -431,6 +431,21 @@ grab thread and sync fallback; channel-distinct fake pixels added so
 the fake can't hide order swaps (zed plugin 40 tests).  Image rebuild
 required.
 
+## Follow-up: e-stop during rollouts (2026-08-18)
+
+E-stop mid-rollout aborted the in-flight move with franky
+``ControlException``, which killed the connection handler (server only
+catches ``ValueError``).  Now: the driver translates ``ControlException``
+and gripper-backend failures into ``ActionRejectedError`` with
+rate-limited automatic error recovery (AER fails while the stop is
+held, succeeds after release), the server pushes a rate-limited
+``action_rejected`` status and stays connected, and the rollout resumes
+once the stop is released.  Also hardened: ``ZedCamera.connect()``
+closes the SDK handle on open failure and ``disconnect()`` tolerates a
+wedged ``close()``.  Note: the scene ZED ended up stuck at the USB
+level (needs replug / host-side USB reset); the e-stop itself should
+not affect USB cameras — check power wiring if it recurs.
+
 ## Follow-up: rollout dataset forwarding (2026-08-18)
 
 ``policy_rollout.py --record`` now waits for r2d2's async finalization

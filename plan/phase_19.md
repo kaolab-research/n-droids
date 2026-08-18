@@ -468,6 +468,33 @@ boundary (mitigate with ``--open-loop-horizon 15``; pipelining via
 openpi-client's action-chunk broker is a future option) plus the 5%
 dynamics attenuation.
 
+#### E-stop handling (2026-08-18 incident)
+
+Pressing the e-stop during a rollout aborted the in-flight
+``robot.move()`` with franky ``ControlException`` ("User Stop
+pressed!"); the driver let it propagate and the server (which only
+catches ``ValueError``) killed the connection handler — the rollout
+died instead of pausing.  Fixed: ``_apply_move`` / ``_apply_gripper``
+translate ``ControlException`` (and gripper-backend failures) into
+``ActionRejectedError``, attempt automatic error recovery at a
+rate-limited cadence (AER fails while the stop is held, succeeds after
+release), and the server pushes a rate-limited ``action_rejected``
+status — the connection survives and the rollout resumes once the
+operator releases the stop (re-enable FCI via Desk if needed).  The
+server's per-cycle rejection log is now also rate-limited.  Non-franky
+exceptions still propagate (bugs must stay loud).  5 new plugin tests
+(franka 86, zed 42).
+
+The same incident wedged the scene ZED at the USB level (grab failures
+then ``CAMERA MOTION SENSORS NOT DETECTED`` / "can't claim interface"
+on restart — the device needs a physical replug or host-side USB reset;
+check whether the scene camera shares a power domain with anything the
+e-stop switches).  Code hardening: failed ``ZedCamera.connect()`` now
+closes the SDK handle, and ``disconnect()`` tolerates a wedged
+``close()`` so container shutdown can't hang.  A wedged camera during a
+session already surfaces ``camera_error`` via the grab-failure
+tracking.
+
 #### Recording + dataset forwarding (2026-08-18)
 
 ``policy_rollout.py --record`` now also **downloads the finished
