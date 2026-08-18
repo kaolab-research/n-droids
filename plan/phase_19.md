@@ -379,6 +379,64 @@ here and in the config; optionally an openpi π0.5 rollout.
 
 ---
 
+#### Phase 19.6 notes (2026-08-18 — thresholds + π0.5 rollout client)
+
+**Error thresholds reworked for DROID mode (keep ``dynamics_factor``
+at 0.05).**  The original thresholds (mean 0.02 / max 0.10 / RMS
+0.03 rad) were position-mode numbers compared against a reference the
+arm can physically reach.  DROID velocity actions demand up to
+±0.2 rad per 15 Hz step — ~3 rad/s instantaneous — while franky's
+default joint velocity limits (2.175 / 2.61 rad/s, ``src/robot.cpp``)
+scaled by 0.05 allow only 0.109–0.131 rad/s (~27× lower).  The old
+metric therefore flagged *intended* attenuation as tracking failure;
+loosening the thresholds would have hidden real anomalies instead.
+
+``test_franka.py`` DROID mode now: (1) tracks against a
+**velocity-capped reference** (each ±0.2-rad step clipped to
+``DYNAMICS_FACTOR × franky limits × dt``), with thresholds applied to
+that residual (mean 0.03 / max 0.15 / RMS 0.05 rad — motion-generator
+fidelity numbers, to validate on hardware); (2) reports the
+policy-vs-cap gap separately as informational output.  ``DYNAMICS_FACTOR``
+env var must match the station config value.  Keeping 0.05 is
+endorsed: it is franky's own documented conservative default, the
+policy is closed-loop and compensates (slow-motion rollouts), and the
+training-distribution shift is captured by the reported gap.
+
+**π0.5 rollout client (``toy-so101/policy_rollout.py``).**  Deep-dived
+openpi's serving stack (primary sources, 2026-08-18):
+``scripts/serve_policy.py`` is **environment-agnostic** — it serves the
+checkpoint over a WebSocket (port 8000, msgpack) given the model's raw
+input dict; the DROID-specific part of openpi lives entirely in the
+*client* (``examples/droid/main.py`` imports ``droid.robot_env``), and
+the client protocol is packaged as the lightweight pip package
+``openpi-client`` (numpy<2, msgpack, websockets — compatible with
+c3po's deps).  Decision: **run openpi's server unmodified**
+(``python scripts/serve_policy.py --env droid`` → auto-downloads the
+``pi05_droid`` checkpoint) and write our own rollout client that
+substitutes c3po for DROID's ``RobotEnv``.
+
+``policy_rollout.py`` mirrors openpi's example loop: chunk (10, 8)
+reuse with an 8-step open-loop horizon, gripper binarization at 0.5,
+action clip to [-1, 1], Ctrl+C deferral during server calls, 224×224
+padded image payloads, 15 Hz pacing via c3po's server-paced ``step()``.
+Observations are mapped to the exact ``DroidInputs`` keys
+(``observation/exterior_image_1_left``, ``observation/wrist_image_left``,
+``observation/joint_position``, ``observation/gripper_position``,
+``prompt``); actions map to ``follower/joint_velocity`` +
+``follower/gripper_position``.  Optional ``--record`` captures the
+rollout through the 19.5 DROID feature-group recorder.  ``--fake-policy``
+smoke-tests the c3po↔r2d2 pipeline without openpi (covered by an r2d2
+integration test).
+
+**Remaining on hardware:** run ``test_franka.py`` with the new metric
+(confirm green at 0.05), then a real π0.5 rollout
+(``policy_rollout.py --prompt "..."`` on the GPU machine with the
+policy server running) — observe gripper binarization behavior, timing
+(server reports infer ms), and whether the closed-loop policy
+compensates for the 5% attenuation.
+
+---
+
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)
 
 First station run crashed on the first DROID action with

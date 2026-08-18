@@ -381,3 +381,27 @@ the driver (built-in Panda table, override via
 ``FrankaRobotConfig.joint_limits``, validated at construction) with
 libfranka's own limit handling as backstop.  Plugin suite 81 tests.
 The NUC image must be rebuilt to pick this up.
+
+## Follow-up: DROID-mode thresholds + π0.5 rollout client (2026-08-18)
+
+- **Thresholds were measuring the wrong thing in DROID mode.**  The
+  position-mode thresholds (0.02/0.03/0.10 rad) compared the arm
+  against a reference that demands ~3 rad/s while the 5% dynamics
+  factor caps franky at 0.109–0.131 rad/s (default joint velocity
+  limits 2.175/2.61 rad/s from franky ``src/robot.cpp`` × 0.05) — a
+  ~27× gap, so every run tripped the thresholds by design.
+  ``test_franka.py`` now tracks a velocity-capped reference (per-step
+  delta clipped to ``DYNAMICS_FACTOR × limits × dt``) with fidelity
+  thresholds on that residual, and reports the policy-vs-cap
+  attenuation separately.  Keeping ``dynamics_factor=0.05`` is
+  endorsed (franky's documented conservative default; π0.5 is
+  closed-loop and compensates).
+- **openpi serving deep-dive.**  ``scripts/serve_policy.py`` is
+  environment-agnostic (WebSocket + msgpack on :8000; the DROID
+  coupling is entirely in openpi's *client* example).  Decision: run
+  it stock with ``--env droid``; wrote ``toy-so101/policy_rollout.py``
+  — a c3po-based rollout client modeled on ``examples/droid/main.py``
+  (chunk reuse with 8-step horizon, gripper binarization, image
+  resize-with-pad to 224, Ctrl+C deferral, optional DROID-group
+  recording) using the lightweight ``openpi-client`` package, plus a
+  ``--fake-policy`` mode smoke-tested in r2d2's test suite.
