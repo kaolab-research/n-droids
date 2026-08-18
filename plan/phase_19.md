@@ -468,6 +468,20 @@ boundary (mitigate with ``--open-loop-horizon 15``; pipelining via
 openpi-client's action-chunk broker is a future option) plus the 5%
 dynamics attenuation.
 
+#### Recording + dataset forwarding (2026-08-18)
+
+``policy_rollout.py --record`` now also **downloads the finished
+dataset to the inference machine** (``--record-dest``, default cwd;
+``--no-record-download`` opts out).  Mechanics worth knowing: r2d2
+finalizes asynchronously after ``stop_recording`` and stops streaming
+observations while doing so, so the client waits for the
+``dataset_ready`` status by draining via ``step(None)`` with an
+``on_status`` callback (the observation timeout at the end is expected
+and handled).  The ``dataset_ready`` URL host became configurable on
+the server (``create_server(http_host=...)``, default ``10.42.0.1``) so
+the loopback E2E test can exercise the full record → finalize →
+download path over a real HTTP server (r2d2 152 passed/5 skipped).
+
 ---
 
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)

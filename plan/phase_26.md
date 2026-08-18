@@ -430,3 +430,14 @@ the live policy path was wrong.  Fixed with ``_bgra_to_rgb`` in the
 grab thread and sync fallback; channel-distinct fake pixels added so
 the fake can't hide order swaps (zed plugin 40 tests).  Image rebuild
 required.
+
+## Follow-up: rollout dataset forwarding (2026-08-18)
+
+``policy_rollout.py --record`` now waits for r2d2's async finalization
+(``dataset_ready`` status drained via ``step(None)`` + ``on_status`` —
+the post-stop observation timeout is expected and handled) and
+downloads the LeRobot v3 dataset to ``--record-dest`` on the inference
+machine; ``--no-record-download`` opts out.  The ``dataset_ready`` URL
+host is now a ``create_server(http_host=...)`` parameter (default
+``10.42.0.1``) so the loopback E2E test runs the full
+record → finalize → download path against a real HTTP server.
