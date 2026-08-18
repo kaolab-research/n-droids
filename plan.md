@@ -13,8 +13,6 @@ The plan is split into one file per phase under [`plan/`](plan/).
 
 | Phase | Title | Status |
 |---|---|---|
-
-† Recovered from git history (provenance noted in the file).
 | [00](plan/phase_00.md) † | Foundation | ✅ |
 | [01](plan/phase_01.md) † | Protocol spec + mock infrastructure (21 tests) | ✅ |
 | [02](plan/phase_02.md) † | c3po transport + robot (57 tests) | ✅ |
