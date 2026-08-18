@@ -366,3 +366,18 @@ details and the remaining 19.6 hardware steps live in `phase_19.md`
 - Remaining: 19.6 hardware validation (15 Hz tracking,
   `dynamics_factor` tuning, optional openpi π0.5 rollout), native-res
   recording, depth video format.
+
+## Follow-up: franky exposes no joint limits (2026-08-18)
+
+First DROID-mode station run crashed on the first action:
+``AttributeError: 'Robot' object has no attribute 'joint_limits'`` —
+the mocked franky had that attribute but the real v1.1.4 binding does
+not (verified against franky's source).  Lesson: when faking an SDK,
+fakes must match the real API surface for everything the code under
+test touches — the fake's extra attribute masked the mismatch.
+
+Fixed test-first: the fake lost the attribute; joint limits now live in
+the driver (built-in Panda table, override via
+``FrankaRobotConfig.joint_limits``, validated at construction) with
+libfranka's own limit handling as backstop.  Plugin suite 81 tests.
+The NUC image must be rebuilt to pick this up.

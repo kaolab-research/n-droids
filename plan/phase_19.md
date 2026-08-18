@@ -376,3 +376,25 @@ the ±0.2 rad conversion).
 analysis, tune ``dynamics_factor`` (start at 0.05; expect magnitude
 attenuation of DROID velocities — see 19.2), record the chosen value
 here and in the config; optionally an openpi π0.5 rollout.
+
+---
+
+#### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)
+
+First station run crashed on the first DROID action with
+``AttributeError: 'Robot' object has no attribute 'joint_limits'`` —
+the mocked franky in the unit tests had a ``joint_limits`` attribute
+that the real franky v1.1.4 binding does not (verified in
+``franky/robot.py``, ``include/franky/robot_state.hpp`` and the
+pybind11 bindings).  The connection handler died, which the client saw
+as an immediate disconnect (the arm never moved — the crash precedes
+the ``move()`` call).
+
+Fix (test-first): the fake lost its ``joint_limits`` attribute so the
+regression cannot be masked again; ``FrankaRobotConfig`` gained
+``joint_limits`` (default ``None`` → built-in Panda table in the
+driver, FR3 users override), validated eagerly at construction; the
+reject-and-hold check reads the driver's table.  libfranka still
+enforces limits during motion generation as a backstop.  Plugin suite
+now 81 tests (4 new).  **The NUC image must be rebuilt** to pick this
+up (``docker build -t r2d2:latest .`` + rerun ``franka_droid.sh``).
