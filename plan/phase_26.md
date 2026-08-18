@@ -405,3 +405,17 @@ The NUC image must be rebuilt to pick this up.
   resize-with-pad to 224, Ctrl+C deferral, optional DROID-group
   recording) using the lightweight ``openpi-client`` package, plus a
   ``--fake-policy`` mode smoke-tested in r2d2's test suite.
+
+## Follow-up: rollout chunk horizon + policy warmup (2026-08-18)
+
+First real π0.5 rollout failed on a hardcoded ``(10, 8)`` action-chunk
+assert copied from openpi's example client — the example is stale: the
+current ``pi05_droid`` config is ``Pi0Config(action_horizon=15)``, so
+the model returns ``(15, 8)`` chunks.  The client crashed before
+sending any action, which is why the arm stayed still.  Fixes in
+``policy_rollout.py``: accept ``(H, 8)`` (validate width == 8, cap the
+open-loop horizon at H), a labeled one-shot warmup inference (first
+server call compiles XLA/cuDNN, ~30 s on the RTX 5090), and the fake
+policy now emits 15-step chunks to mirror the real model.  Unit tests
+added; lesson: mirror the *current* checkpoint config in test doubles,
+not a stale example file.

@@ -435,6 +435,20 @@ policy server running) — observe gripper binarization behavior, timing
 (server reports infer ms), and whether the closed-loop policy
 compensates for the 5% attenuation.
 
+#### First rollout fix note (2026-08-18 — chunk horizon is config-driven)
+
+The first real rollout crashed on a hardcoded ``(10, 8)`` chunk-shape
+assert (copied from openpi's example client, which is stale): the
+``pi05_droid`` config is ``Pi0Config(action_horizon=15)``, so the model
+returns **(15, 8)** chunks.  The client died before sending any action
+(the arm correctly stayed still; r2d2 stayed healthy).  Also learned:
+the first server inference compiles XLA/cuDNN and can take ~30 s —
+``policy_rollout.py`` now runs a labeled warmup inference before the
+episode, validates chunks as ``(H, 8)`` with ``H`` capped against the
+requested open-loop horizon, and raises an informative error for
+non-8-wide chunks.  The fake policy emits 15-step chunks to mirror the
+real model; unit tests cover the validation (r2d2 151 passed/5 skipped).
+
 ---
 
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)
