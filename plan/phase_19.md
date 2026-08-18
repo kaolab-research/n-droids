@@ -449,6 +449,25 @@ requested open-loop horizon, and raises an informative error for
 non-8-wide chunks.  The fake policy emits 15-step chunks to mirror the
 real model; unit tests cover the validation (r2d2 151 passed/5 skipped).
 
+#### Second rollout follow-up (2026-08-18 — ZED channels were BGR)
+
+The rollout ran but the policy confused red and blue.  Root cause: the
+ZED SDK's ``retrieve_image`` returns 4-channel **BGRA**; the driver
+dropped the alpha and published the remaining **BGR** as "RGB" over the
+wire — so the policy (trained on RGB DROID data) saw R and B swapped.
+The recording path hid the bug: ``_server`` converts the frames
+``RGB→BGR`` before JPEG encoding, which double-swapped the already-BGR
+frames back to correct colors — recorded MP4s looked fine while the
+policy path was wrong.  Fixed test-first in ``lerobot_camera_zed``
+(``_bgra_to_rgb`` in both the grab thread and the sync fallback;
+channel-distinct fake pixels, 2 new tests, plugin suite now 40).
+``policy_rollout.py`` also logs the server's per-query inference time.
+**Rebuild the NUC image** before the next rollout.  Remaining pause
+sources are expected: a policy-server round trip at each 8-step chunk
+boundary (mitigate with ``--open-loop-horizon 15``; pipelining via
+openpi-client's action-chunk broker is a future option) plus the 5%
+dynamics attenuation.
+
 ---
 
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)

@@ -419,3 +419,14 @@ server call compiles XLA/cuDNN, ~30 s on the RTX 5090), and the fake
 policy now emits 15-step chunks to mirror the real model.  Unit tests
 added; lesson: mirror the *current* checkpoint config in test doubles,
 not a stale example file.
+
+## Follow-up: ZED BGR channel bug (2026-08-18)
+
+The ZED SDK returns 4-channel **BGRA** frames; the driver dropped alpha
+and published BGR labeled as RGB — π0.5 (trained on RGB) confused red
+and blue.  Subtlety: the recording path's ``RGB→BGR`` JPEG conversion
+double-swapped the frames back, so recorded MP4s looked correct while
+the live policy path was wrong.  Fixed with ``_bgra_to_rgb`` in the
+grab thread and sync fallback; channel-distinct fake pixels added so
+the fake can't hide order swaps (zed plugin 40 tests).  Image rebuild
+required.
