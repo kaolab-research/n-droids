@@ -507,3 +507,18 @@ model updated to match.  ``policy_rollout.py`` gained a
 ``--gripper-threshold`` knob.  Next hardware step: try
 ``dynamics_factor ≈ 0.2`` for grasping rollouts (DROID runs full
 dynamics; 0.2 ≈ 0.44 rad/s is still modest).
+
+## Follow-up: DROID smoothness parity — command LPF + workspace box (2026-08-19)
+
+Task completes at ``dynamics_factor=0.2`` but motion is jerky.
+polymetis's ``franka_hardware`` config (DROID's controller) explains
+why the original is smooth and safe without any dynamics factor:
+1 kHz realtime joint-PD torque loop (``Kq=[40,30,50,25,35,25,10]``,
+``Kqd=[4,6,5,5,3,2,1]``) with 15 Hz target updates, a 100 Hz torque
+low-pass, a workspace bounding box, and a per-tick SafetyController.
+franky can't replicate the torque loop directly (no joint impedance
+motion, no runtime target updates) — deferred as a future 1 kHz
+``control()``-API project.  Implemented the command-level equivalents:
+an exponential velocity low-pass (``velocity_filter_tau``, default
+1/15 s) and a workspace bounding box (``workspace_pos_lower/upper``)
+that rejects out-of-box motion.  Franka plugin 92 tests.

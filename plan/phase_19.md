@@ -491,6 +491,33 @@ DROID runs full dynamics) and retest the hover; ``policy_rollout.py``
 gained ``--gripper-threshold`` (default 0.5) to experiment with the
 binarization point if part-close/open flutter persists.
 
+#### DROID smoothness/safety parity (2026-08-19 — jerky motion at 0.2)
+
+At ``dynamics_factor=0.2`` the task completes but motion is jerky.
+Why is DROID smooth and safe with *no* dynamics factor at all?  From
+polymetis's ``franka_hardware`` config (the controller DROID launches):
+a **1 kHz realtime joint-PD torque loop** (``JointSpacePD`` with modest
+gains ``Kq=[40,30,50,25,35,25,10]``, ``Kqd=[4,6,5,5,3,2,1]``) whose
+desired joints update at 15 Hz, a **100 Hz low-pass on the torque
+commands** (``lpf_cutoff_frequency: 100``), a **workspace bounding box**,
+and a per-tick SafetyController with margins + velocity/torque limits.
+Smoothness = continuous torque dynamics filtering the 15 Hz steps;
+safety = compliance + limits, not velocity caps.
+
+Replication feasibility: franky has no joint-space impedance motion and
+no runtime target updates (its ``CartesianImpedanceMotion`` is
+fixed-duration, cartesian, torque-level).  A faithful port would write
+a 1 kHz joint-PD loop on franky's ``control()`` API with the same gains
++ 100 Hz torque LPF — realtime-sensitive, deferred.  **Implemented
+instead** (test-first, franka plugin 92 tests): (1) **command low-pass**
+— ``velocity_filter_tau`` (default 1/15 s) exponential filter on the
+normalized velocity stream, the 15 Hz analogue of DROID's 100 Hz torque
+LPF; (2) **workspace bounding box** — ``workspace_pos_lower/upper``
+config, rejecting actions while the end-effector is outside the box
+(polymetis parity; unset by default).  Rebuild the image; expect fluid
+motion at 0.2.  If limits are still hit hard, ``dynamics_factor``,
+``velocity_filter_tau``, and the workspace box are the tuning surface.
+
 #### Second rollout follow-up (2026-08-18 — ZED channels were BGR)
 
 The rollout ran but the policy confused red and blue.  Root cause: the
