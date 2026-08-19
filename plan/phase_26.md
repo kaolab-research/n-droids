@@ -561,3 +561,35 @@ removes its own + the classic franka container, since the host network
 shares port 9090, and logs its own container name).  Final sweep:
 r2d2 154/5 (with-lerobot 167/4), c3po 143/2, gripper 26, franka 67,
 zed 42, droid 26.
+
+## Follow-up: Phase 19.8 — FCI ceiling + pivot to franky 2.0 (2026-08-19)
+
+The Desk update attempt hit the hardware ceiling: the arm is an
+Emika-era Panda at system 4.2.2 = FCI server 5, with no upgrade path
+(libfranka 0.10.0+ requires FR3 system >= 5.2.0; 0.9.2 is the last
+release for FCI 5).  pylibfranka turned out to be a dead end on this
+arm (PyPI publishes only 0.20.2–0.21.3 — FCI 10 — and the Dockerfile's
+0.18.0 pin was invalid).  Pivoted to **franky 2.0.0** (2026-08-13),
+which ships libfranka 0.9.2 cp312 wheels and exposes the realtime
+torque loop in pure Python.  Verified against the v2.0.0 sources:
+``JointImpedanceTrackingMotion`` computes τ = K·(q_d−q) − D·q̇ on top
+of libfranka's internal gravity comp with per-cycle ``max_delta_tau``
+and ``move(limit_rate, cutoff_frequency)`` — polymetis's exact loop
+settings — and every franky 1.1.4 API the franka plugin uses survives
+in 2.0 (Robot/Gripper/JointMotion/move/recover_from_errors/
+state.O_T_EE), so the franka plugin migrates with zero code changes.
+
+Shipped (test-first): DroidRobot's pylibfranka thread replaced by a
+franky 2.0 impedance thread (reference updated at 15 Hz from
+``send_action``, state published from ``robot.state``, e-stop detection
+via ``robot.is_in_control`` + rate-limited ``recover_from_errors()`` +
+motion restart, joint limits feeding both the reject-and-hold and the
+motion's torque-level soft limits); config gained ``limit_rate``
+(default True), ``max_delta_tau`` (1.0), ``compensate_coriolis``
+(False — DROID parity).  Dockerfile installs
+``franky_control 2.0.0+libfranka.0.9.2`` (cp312 manylinux; deps numpy +
+websockets only) via ``FRANKY_VERSION``/``FRANKY_LIBFRANKA`` args and
+drops pylibfranka entirely.  franka_setup.md §6 rewritten around the
+FCI-5 ceiling (matrix + wheel pinning + why-not-pylibfranka).  Droid
+plugin suite: 28 tests.  Next: full sweep + hardware validation with
+the rebuilt image (torque loop still unproven on the real arm).

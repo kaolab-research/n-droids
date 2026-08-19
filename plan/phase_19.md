@@ -697,3 +697,45 @@ reject-and-hold check reads the driver's table.  libfranka still
 enforces limits during motion generation as a backstop.  Plugin suite
 now 81 tests (4 new).  **The NUC image must be rebuilt** to pick this
 up (``docker build -t r2d2:latest .`` + rerun ``franka_droid.sh``).
+
+#### Phase 19.8 notes (2026-08-19 — FCI ceiling closes; pivot to franky 2.0, done)
+
+The Desk update hit the hardware ceiling: the arm is a legacy Emika
+Panda at system 4.2.2 = **FCI server 5** (official matrix: server 5 ↔
+system >= 4.2.1 ↔ libfranka 0.9.x; libfranka 0.10.0 requires FR3 system
+>= 5.2.0).  pylibfranka is a dead end on this arm: PyPI publishes only
+0.20.2–0.21.3 (FCI 10) — no 0.9.x binding exists anywhere, and the
+Dockerfile's ``pylibfranka==0.18.0`` pin was invalid regardless (0.18.0
+was never published).
+
+New route (user-approved): **franky 2.0.0** (released 2026-08-13).
+It ships prebuilt wheels for libfranka **0.9.2** (cp312 manylinux —
+fits the r2d2 image, FCI 5) and exposes the realtime torque loop in
+pure Python: ``JointImpedanceTrackingMotion`` computes
+τ = K·(q_d−q) − D·q̇ (+ optional coriolis/friction/joint-limit torques
+and a per-cycle ``max_delta_tau`` clamp) on top of libfranka's internal
+gravity compensation, with ``move(limit_rate=..., cutoff_frequency=...)``
+passing polymetis's exact settings (rate limiting on, 100 Hz LPF).
+Verified against the v2.0.0 sources: every franky 1.1.4 API the franka
+plugin uses (Robot/Gripper/JointMotion/move/recover_from_errors/
+state.O_T_EE) survives in 2.0, so the franka plugin migrates without
+code changes.  The franky 2.0 impedance guide's FAQ even uses
+"server version: 5" as its example.
+
+Implementation plan (test-first): DroidRobot swaps the pylibfranka
+thread for a franky 2.0 control thread (motion reference updated at
+15 Hz from ``send_action``, state published from ``robot.state``,
+e-stop detection via ``robot.is_in_control`` + rate-limited
+``recover_from_errors()``); the config gains ``limit_rate``,
+``max_delta_tau``, ``compensate_coriolis``; the Dockerfile installs the
+``franky_control 2.0.0+libfranka.0.9.2`` cp312 wheel and drops
+pylibfranka; franka_setup.md §6 is rewritten around the FCI-5 ceiling.
+
+**Result (same day):** implemented test-first.  DroidRobot's control
+thread now drives ``JointImpedanceTrackingMotion`` (reference streamed
+at 15 Hz, state published from ``robot.state``, e-stop via
+``robot.is_in_control`` + rate-limited recovery + motion restart); the
+franka plugin needed zero code changes (its whole franky API surface
+survives in 2.0 — verified against the v2.0.0 binding sources).  Droid
+plugin suite: 28 tests.  Remaining: full sweep + rebuild the NUC image
++ hardware validation (the torque loop is still unproven on the arm).

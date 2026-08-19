@@ -392,66 +392,75 @@ and compare `ls /dev/bus/usb/*/*` inside and outside the container.
 
 ---
 
-## 6. FCI upgrade for the DROID robot type (pylibfranka)
+## 6. FCI 5 is the ceiling — no firmware upgrade for the legacy Panda
 
-The `droid` robot type (Phase 19.7) controls the arm with **pylibfranka**,
-the official Franka Robotics Python bindings.  Each pylibfranka wheel
-bundles a fixed libfranka version, and libfranka must match the control
-box's **FCI server version**.  The older `franka` robot type is unaffected
-by this: franky ships wheel bundles for libfranka 0.7.1–0.18.0 (the
-current Panda at FCI server 5 uses 0.9.2), so an FCI upgrade is only
-needed for the DROID backend — but it changes the control box for both.
+The DROID station runs on **franky 2.0** (Phase 19.8), whose wheels
+bundle a fixed libfranka version that must match the control box's
+**FCI server version**.  An attempted Desk/System update (Phase 19.7)
+hit the hardware ceiling: this is a **Franka Emika-era Panda**, and its
+last firmware is **system 4.2.2 = FCI server 5** — Desk offers nothing
+newer, and there is no upgrade path.  This is expected, not a fault:
+
+- libfranka 0.9.1/0.9.2 *"Requires Panda system version >= 4.2.1"*;
+- libfranka 0.10.0 and newer *"Requires Franka Research 3 system
+  version >= 5.2.0"* — the 5.x+ systems belong to the FR3 era.
+
+The station therefore pins **libfranka 0.9.2** (the last release for
+FCI 5), and the arm stays on 4.2.2.  franky 2.0's torque/impedance
+control works on FCI 5 — its own FAQ uses *"server version: 5"* as the
+worked example.
 
 ### Compatibility matrix (official FCI ↔ libfranka mapping)
 
-| FCI server | pylibfranka (= libfranka) |
-|---|---|
-| 7 | 0.13.3 |
-| 8 | 0.14.1 |
-| 9 | 0.15.0 |
-| 10 | 0.18.0 (and newer) |
-
-The image's default build arg is `PYLIBFRANKA_VERSION=0.18.0`
-(FCI server 10); rebuild with the value matching your control box if it
-differs.  If no wheel exists for the version you need, build pylibfranka
-from the matching libfranka source tag in a builder stage instead (cmake
-+ pybind11) — see the Dockerfile comment and the Phase 19.7 notes.
-
-### Procedure
-
-1. **Record the current FCI server version.**  Franka Desk → Settings →
-   System (or the control box's web dashboard at `https://172.16.0.2`).
-   Note it down before touching anything.
-2. **Update the control box.**  Franka Desk → System update (the Desk
-   app needs internet; the arm can stay idle with brakes locked and FCI
-   deactivated).  Follow Desk's prompts — it enforces any required
-   intermediate versions.  Firmware updates are one-way; read the
-   release notes Desk shows before confirming.
-3. **Map the new server version** to the table above and rebuild the
-   r2d2 image with the matching pylibfranka:
-
-   ```bash
-   docker build --build-arg PYLIBFRANKA_VERSION=0.18.0 -t r2d2:latest .
-   ```
-
-4. **Verify the baked-in version** matches what you recorded:
-
-   ```bash
-   docker run --rm --entrypoint python r2d2:latest -c \
-     "import pylibfranka, importlib.metadata; print(importlib.metadata.version('pylibfranka'))"
-   ```
-
-   (Add `--cap-add=SYS_NICE` if this exec is rejected — see the
-   troubleshooting row above.)
-5. **Bring the station up** as usual (§3) and confirm the DROID driver
-   connects.  A version mismatch surfaces as
-   `IncompatibleVersionException` at connect, which reports **both** the
-   libfranka version in the image and the FCI server version in the
-   control box — use those two numbers with the table above.
-
-### Version-mismatch troubleshooting
-
-| Symptom | Cause | Fix |
+| FCI server | Robot system version | libfranka |
 |---|---|---|
-| `IncompatibleVersionException` in the DROID station logs | pylibfranka's bundled libfranka doesn't match the control box's FCI server | Read the two versions from the exception, map them through the table above, and rebuild with the matching `PYLIBFRANKA_VERSION` (or update the control box via Desk) |
-| The franky-based `franka` station stops connecting after an FCI update | The control box moved outside franky's bundled range (0.7.1–0.18.0) | Either keep the FCI server within that range or use the `droid` station for the arm (the recommended path going forward) |
+| 5 (this arm) | >= 4.2.1 | **0.9.1 / 0.9.2** |
+| 6 | >= 5.2.0 | 0.10.0+ |
+| 7 | >= 5.5.0 | 0.13.3+ |
+| 8 | >= 5.7.0 | 0.14.1+ |
+| 9 | >= 5.7.2 | 0.15.0+ |
+| 10 | >= 5.9.0 | 0.18.0+ |
+
+(Source: the official libfranka compatibility matrix.  franky 2.0.0's
+GitHub release ships wheels for libfranka 0.7.1, 0.8.0, 0.9.2, 0.12.1,
+0.13.3, 0.14.2, 0.17.0 and 0.21.2 — pick the row matching the control
+box and check the release assets for the exact wheel.)
+
+### Installing the matching wheels
+
+The r2d2 image installs the FCI-5 wheel by default
+(`FRANKY_LIBFRANKA=0.9.2`).  For this arm, rebuild with the defaults —
+no build args needed:
+
+```bash
+docker build -t r2d2:latest .
+```
+
+For a **newer arm** (FR3 or post-2023 Panda), set the matching libfranka:
+
+```bash
+docker build --build-arg FRANKY_LIBFRANKA=0.13.3 -t r2d2:latest .   # server 7
+```
+
+### Verifying the baked-in version
+
+```bash
+docker run --rm --entrypoint python r2d2:latest -c \
+  "import importlib.metadata; print(importlib.metadata.version('franky-control'))"
+# → 2.0.0+libfranka.0.9.2  (the local version is the libfranka pin)
+```
+
+(Add `--cap-add=SYS_NICE` if this exec is rejected — see the
+troubleshooting row above.)  A version mismatch surfaces as
+`IncompatibleVersionException` at connect, which reports **both** the
+libfranka version in the image and the FCI server version in the
+control box — use those two numbers with the table above.
+
+### Why not pylibfranka / a Python downgrade?
+
+pylibfranka (the official bindings) only exists for modern libfranka:
+PyPI publishes 0.20.2–0.21.3, which target FCI 10.  There is **no
+0.9.x pylibfranka** and no older wheel a Python downgrade could unlock —
+franky 2.0 is the Python binding for this arm.  (A C++ helper against
+libfranka 0.9.2's `Robot::control()` remains a viable fallback, but
+franky 2.0 wraps exactly that loop already.)

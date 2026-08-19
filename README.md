@@ -218,7 +218,7 @@ Press **n** to end an episode, **r** to re‑record, **q** to stop. That's it.
 | ------------------------ | ----------------------- | --------------------------------- | ------- |
 | SO‑101 (Feetech STS3215) | USB‑serial              | LeRobot `SOFollower`              | ✓       |
 | Franka Panda             | Ethernet to control box | Custom `FrankaRobot` (franky/libfranka, plugin package)  | ✓ (hardware‑verified) |
-| DROID (Franka Panda + Robotiq 2F‑85 + 2× ZED) | Ethernet + USB | Custom `DroidRobot` (pylibfranka 1 kHz torque loop, plugin package) | station hardware‑verified; torque loop pending arm validation |
+| DROID (Franka Panda + Robotiq 2F‑85 + 2× ZED) | Ethernet + USB | Custom `DroidRobot` (franky 2.0 joint impedance, libfranka 0.9.2 torque loop, plugin package) | station hardware‑verified; torque loop pending arm validation |
 | Kinova Gen3              | Ethernet                | Custom `KinovaRobot` (Kortex API) | planned |
 | ReBot B601‑DM            | CAN bus                 | LeRobot `RebotB601Follower` (native in v0.6.0) | ✓ |
 
