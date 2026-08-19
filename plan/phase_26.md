@@ -617,3 +617,23 @@ found by hardware, fixed test-first):
    fallback; franka workspace check) and the fakes were made faithful
    (property, not method) so this class of bug fails in CI instead of
    on the arm.  franka plugin: 67 tests.
+
+## Follow-up: gravity compensation on FCI 5 — arm fell (2026-08-19)
+
+First real DROID rollout attempt: only the gripper moved; the arm
+sagged slowly and free-fell after e-stop recovery.  Root cause found in
+the franky 2.0 sources: ``JointImpedanceBase`` computes
+τ = K·(q_des−q) − D·q̇ + feedforward with **no gravity term**, and
+libfranka's ``control()`` — on every version, including 0.9.2 — applies
+the commanded torque verbatim ("without gravity and friction").  The
+control box only compensates gravity for its *internal* position/
+velocity motion generators (why the franky/Ruckig path holds fine);
+franky's docs' "internal gravity compensation" claim does not apply to
+the torque mode on this arm.  Fix (the polymetis/DROID-canonical one):
+the driver now adds ``g(q)`` from the official dynamics model —
+``robot.model.gravity(state)`` — as each reference's ``tau_ff``, giving
+τ = K·(q_des−q) − D·q̇ + g(q), seeded on the first reference too.
+Fake model in the conftest; 2 tests assert the feed-forward on the seed
+and on every tick (droid plugin suite still 30).  The mid-run
+"control loop ended" at 22:41:43 was the FCI terminating the loop as
+the arm sagged — expected gone with gravity; re-verify on hardware.

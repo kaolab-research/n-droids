@@ -464,3 +464,21 @@ PyPI publishes 0.20.2–0.21.3, which target FCI 10.  There is **no
 franky 2.0 is the Python binding for this arm.  (A C++ helper against
 libfranka 0.9.2's `Robot::control()` remains a viable fallback, but
 franky 2.0 wraps exactly that loop already.)
+
+### Gravity compensation on FCI 5 (torque mode is raw)
+
+The DROID station's impedance/torque loop does **not** get gravity
+compensation from the control box: libfranka's `control()` — on every
+version, including 0.9.2 — applies the commanded torque **verbatim**
+("joint-level torque commands without gravity and friction").  The
+control box only compensates gravity for its *internal* motion
+generators, which is why the franky/Ruckig path (`franka` robot type,
+position motions) holds position fine while a raw torque loop falls.
+polymetis's franka_hardware (DROID's original controller) handled this
+by computing `g(q)` from `franka::Model` and adding it to the command —
+and the `droid` driver does the same: each cycle it passes
+`robot.model.gravity(state)` (official dynamics model, payload
+included) as the motion's `tau_ff`, giving
+`τ = K·(q_des−q) − D·q̇ + g(q)`.  No configuration is needed; if the
+arm ever sags again, check that the payload parameters in Franka Desk
+match the real end-effector (the model uses the configured load).
