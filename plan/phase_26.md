@@ -665,3 +665,26 @@ findings:
    self-evidences the fix.  Container-side check before rebuilding:
    ``docker exec r2d2-droid grep -c tau_ff /usr/local/lib/python3.12/
    site-packages/lerobot_robot_droid/droid.py`` (0 = old image).
+
+## Follow-up: gravity-fix live — arm shoots up; loop killed by FCI (2026-08-19)
+
+Rebuild confirmed the fix is live ("gravity torque: [...]" line, droid
+plugin discovered).  New failure mode: the arm drifted **up** to the
+ceiling pose during test_franka.py and shot up again after e-stop
+release; the FCI kept killing the control loop (machine-gun restarts
+every ~52 ms in the logs).  Timeline detail: the first loop death came
+~1.2 s after the c3po client connected and two-ZED streaming started
+(same pattern in the earlier run) — CPU/streaming load on the NUC is a
+prime suspect for the FCI-side terminations.  Verifications done:
+franky's Model::gravity wrapper on libfranka 0.9 passes
+gravity_earth = state.O_ddP_O = {0,0,-9.81} (correct), the impedance
+law's q_error sign is correct (reference.q − state.q), and
+test_franka.py's DROID mode is a bounded 0.25 Hz sinusoid (not a random
+walk — it cannot bias a direction).  Implemented: the failure path now
+logs the robot's own error state (has_errors / current_errors /
+last_motion_errors / robot_mode / command_success_rate) — the FCI error
+codes will name the killer; a 5 s periodic q/q_des/tau_g diag line;
+and a 0.5 s restart backoff (no more machine-gun restarts, interruptible
+on disconnect).  Droid plugin suite: 32.  Next hardware run will show
+which reflex/error kills the loop and whether the hold path (no client)
+stays put.
