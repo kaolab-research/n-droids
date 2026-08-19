@@ -522,3 +522,42 @@ motion, no runtime target updates) — deferred as a future 1 kHz
 an exponential velocity low-pass (``velocity_filter_tau``, default
 1/15 s) and a workspace bounding box (``workspace_pos_lower/upper``)
 that rejects out-of-box motion.  Franka plugin 92 tests.
+
+## Follow-up: Phase 19.7 — first-class "DROID" robot type via pylibfranka (2026-08-19)
+
+The Franka + Robotiq + 2x ZED package is now a whole new robot type,
+``droid``, implemented with pylibfranka (the official Franka Robotics
+bindings) driving a 1 kHz joint-PD torque loop — the same design as
+polymetis's ``franka_hardware`` that made the original DROID smooth —
+instead of being retro-fitted into the franky/Ruckig path.  The franky
+backend is untouched and remains the "Franka support" option;
+``dynamics_factor`` / ``velocity_filter_tau`` / Ruckig stay
+franky-only, while the DROID backend gains impedance ``kq``/``kqd``
+(polymetis defaults), a 100 Hz torque LPF, workspace box, collision
+behavior and RealtimeConfig knobs.  A new shared plugin
+``lerobot_gripper_robotiq`` (RobotiqGripperWrapper + width↔DROID-
+position conversion, 26 tests) was split out of
+``lerobot_robot_franka`` (now 66 tests); the new ``lerobot_robot_droid``
+plugin (26 tests) provides ``DroidRobot`` with e-stop auto-recovery.
+r2d2 registers the ``droid`` robot type, derives droid_mode from it,
+and ships ``station.droid.yaml`` + ``droid.sh``; the Dockerfile installs
+pylibfranka 0.18.0 (FCI server 10) plus both new plugins.  Suites:
+r2d2 154/5, c3po 143/2.  The 1 kHz loop is unit-tested against the
+fake but unproven on the real arm — hardware validation is the next
+user step (the pylibfranka version must match the control box's FCI
+server version; see franka_setup.md §6).
+
+## Follow-up: GripperConfig unified + launch-script fixes (2026-08-19)
+
+Resolved the last Phase 19.7 loose end: ``config_franka`` still carried
+its own ``GripperConfig`` alongside the shared schema.  The franka
+plugin now re-exports ``lerobot_gripper_robotiq.GripperConfig`` (the
+schema gained ``"stock"`` for the franky hand) with the franka field
+default preserved as ``type="stock"``; ``type="none"`` arm-only mode is
+now honored by both backends, and r2d2's dict coercion keeps the stock
+default for gripper blocks without an explicit type.  Also fixed the
+container-name residue in ``droid.sh``/``franka_droid.sh`` (each now
+removes its own + the classic franka container, since the host network
+shares port 9090, and logs its own container name).  Final sweep:
+r2d2 154/5 (with-lerobot 167/4), c3po 143/2, gripper 26, franka 67,
+zed 42, droid 26.

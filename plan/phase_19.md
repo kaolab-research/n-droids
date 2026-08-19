@@ -518,6 +518,74 @@ config, rejecting actions while the end-effector is outside the box
 motion at 0.2.  If limits are still hit hard, ``dynamics_factor``,
 ``velocity_filter_tau``, and the workspace box are the tuning surface.
 
+#### Design decision (2026-08-19 — the Ruckig layer is the wrong layer)
+
+Parameter sweeps over (dynamics_factor, velocity_filter_tau) plateau:
+grasping still hovers short and high factors overshoot.  Root cause at
+the design level: **franky is a motion-generator library** — Ruckig
+trajectories with velocity/accel/jerk caps, and its Python API exposes
+**no low-level 1 kHz control loop** (verified: franky v1.1.4's README
+states "instead of relying on low-level control commands, franky
+expects high-level position or velocity targets"; no ``control()``
+binding exists).  DROID's motion is a 1 kHz joint-PD **torque loop**
+with 15 Hz target updates — a different control paradigm that cannot be
+reached by tuning Ruckig parameters.  Polymetis itself is archived
+(facebookresearch/polymetis), so adopting it is not an option.
+
+**Decision: add an impedance control backend** for DROID mode using
+**pylibfranka** — the official, maintained libfranka Python bindings
+(Franka Robotics) — whose ``Robot.start_torque_control()`` provides the
+1 kHz torque loop **with automatic gravity compensation**.  The backend
+implements polymetis's exact controller: ``τ = Kq·(q_des − q) − Kqd·q̇``
+(JointSpacePD, gains from config defaulting to polymetis's
+``Kq=[40,30,50,25,35,25,10]`` / ``Kqd=[4,6,5,5,3,2,1]``), a 100 Hz
+torque low-pass, 15 Hz target updates from the server thread, and our
+existing safety layer (workspace box, joint-limit reject, collision
+behavior, e-stop recovery).  franky remains the backend for position
+mode/teleop.  This is scoped as **Phase 19.7** — implement once the
+container builds pylibfranka wheels for libfranka 0.9.2/Python 3.12.
+
+#### Phase 19.7 implementation notes (2026-08-19 — DROID robot type, done)
+
+The user reclassified the station: **DROID is a first-class robot
+type** (Franka + Robotiq + 2× ZED speaking the DROID protocol), keeping
+the franky-based Franka support untouched.  Feasibility corrections
+found during planning: pylibfranka wheels bundle modern libfranka and
+track its version — per the official compatibility matrix the binding
+must match the FCI *server* version (7→0.13.3, 8→0.14.1, 9→0.15.0,
+10→0.18.0+), so the Panda needs a Desk/System update first
+(``franka_setup.md`` §6 documents the procedure and the matrix).
+Skipped the C++-helper fallback accordingly.
+
+Shipped (test-first):
+
+- **New shared plugin ``lerobot_gripper_robotiq``**: the Robotiq 2F-85
+  wrapper, DROID-convention helpers, and ``GripperConfig`` extracted
+  from the franka plugin — single source of truth used by both robot
+  plugins (franka: 67 tests, gripper: 26 tests).
+- **New plugin ``lerobot_robot_droid``** (26 tests): ``DroidRobot``
+  with ``DroidRobotConfig`` (registered ``"droid"``) — pylibfranka
+  ``start_torque_control()`` in a dedicated thread computing
+  ``τ = Kq·(q_des−q) − Kqd·q̇`` (pure, tested ``compute_pd_torque``)
+  with a 100 Hz torque LPF; 15 Hz target updates from ``send_action``
+  (normalize → ±0.2 rad → joint-limit reject-and-hold → workspace box →
+  ``q_des``); gravity compensation automatic; e-stop resilience
+  (rate-limited ``automatic_error_recovery`` + loop restart);
+  DROID observation surface (``gripper_position`` 0=open/1=closed) and
+  features; ``droid_compatible = True`` drives r2d2's DROID mode.
+  **No dynamics factor, no velocity filter, no Ruckig** — the impedance
+  loop provides smoothness and direction fidelity natively.
+- **r2d2**: ``"droid"`` registry entry; ``droid_mode`` derived from the
+  robot's ``droid_compatible`` attribute; ``config/station.droid.yaml``
+  (polymetis gains, workspace-box example) + ``launch_scripts/droid.sh``.
+- **Dockerfile**: ``ARG PYLIBFRANKA_VERSION`` (default 0.18.0; set per
+  the FCI matrix) + the two new plugins installed.
+
+**Remaining (hardware)**: Desk/System update → record the FCI server
+version → rebuild the image with the matching ``PYLIBFRANKA_VERSION`` →
+``droid.sh`` → rerun ``test_franka.py`` and the π0.5 rollout.  Expect
+DROID-faithful smooth, compliant motion with no parameter sweeps.
+
 #### Second rollout follow-up (2026-08-18 — ZED channels were BGR)
 
 The rollout ran but the policy confused red and blue.  Root cause: the

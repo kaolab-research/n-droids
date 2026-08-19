@@ -32,7 +32,7 @@ The plan is split into one file per phase under [`plan/`](plan/).
 | [16](plan/phase_16.md) | Franka Panda Support (16 tests, hardware-verified) | ✅ |
 | [17](plan/phase_17.md) | Robotiq 2F-85 Gripper Support (28 tests, hardware-verified) | ✅ |
 | [18](plan/phase_18.md) | Stereolabs ZED Camera Support (22 tests, hardware-verified) | ✅ |
-| [19](plan/phase_19.md) | π0.5-DROID Policy Interface Alignment | 🔄 19.1–19.5 ✅, 19.6 pending hardware |
+| [19](plan/phase_19.md) | π0.5-DROID Policy Interface Alignment | 🔄 19.1–19.5, 19.7 ✅; 19.6 + pylibfranka torque loop pending hardware |
 | [20](plan/phase_20.md) | Lightweight LeRobot v3.0 Dataset Parser (c3po) | planned |
 | [21](plan/phase_21.md) | c3po Live View | tabled |
 | [22](plan/phase_22.md) | BOX Dataset Upload (r2d2) | planned |

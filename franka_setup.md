@@ -278,7 +278,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 |---|---|---|
 | `Could not connect to Franka` | Control box not powered or wrong IP | Ping `172.16.0.2`; check Ethernet cable |
 | `communication_constraints_violation` | RT kernel not enabled or realtime group missing | Re-check Section 2 |
-| `IncompatibleVersionException` | Wrong libfranka version for your firmware | Franka Panda uses libfranka 0.9.2 — check the Dockerfile |
+| `IncompatibleVersionException` | Wrong libfranka version for your firmware | The exception reports both versions — map them through the table in Section 6 |
 | FCI activation button greyed out | Brakes not unlocked first | Unlock joints, then activate FCI |
 | Arm does not move | FCI not activated in Desk | Go to Desk → Activate FCI |
 | `franky is not installed` in Docker logs | Docker image is stale | Rebuild with `docker build -t r2d2:latest .` |
@@ -389,3 +389,69 @@ If the container lists 0 cameras, the USB devices aren't passed through —
 use the bind mount `-v /dev/bus/usb:/dev/bus/usb` (NOT `--device` with a
 directory, which doesn't grant the cgroup access USB enumeration needs)
 and compare `ls /dev/bus/usb/*/*` inside and outside the container.
+
+---
+
+## 6. FCI upgrade for the DROID robot type (pylibfranka)
+
+The `droid` robot type (Phase 19.7) controls the arm with **pylibfranka**,
+the official Franka Robotics Python bindings.  Each pylibfranka wheel
+bundles a fixed libfranka version, and libfranka must match the control
+box's **FCI server version**.  The older `franka` robot type is unaffected
+by this: franky ships wheel bundles for libfranka 0.7.1–0.18.0 (the
+current Panda at FCI server 5 uses 0.9.2), so an FCI upgrade is only
+needed for the DROID backend — but it changes the control box for both.
+
+### Compatibility matrix (official FCI ↔ libfranka mapping)
+
+| FCI server | pylibfranka (= libfranka) |
+|---|---|
+| 7 | 0.13.3 |
+| 8 | 0.14.1 |
+| 9 | 0.15.0 |
+| 10 | 0.18.0 (and newer) |
+
+The image's default build arg is `PYLIBFRANKA_VERSION=0.18.0`
+(FCI server 10); rebuild with the value matching your control box if it
+differs.  If no wheel exists for the version you need, build pylibfranka
+from the matching libfranka source tag in a builder stage instead (cmake
++ pybind11) — see the Dockerfile comment and the Phase 19.7 notes.
+
+### Procedure
+
+1. **Record the current FCI server version.**  Franka Desk → Settings →
+   System (or the control box's web dashboard at `https://172.16.0.2`).
+   Note it down before touching anything.
+2. **Update the control box.**  Franka Desk → System update (the Desk
+   app needs internet; the arm can stay idle with brakes locked and FCI
+   deactivated).  Follow Desk's prompts — it enforces any required
+   intermediate versions.  Firmware updates are one-way; read the
+   release notes Desk shows before confirming.
+3. **Map the new server version** to the table above and rebuild the
+   r2d2 image with the matching pylibfranka:
+
+   ```bash
+   docker build --build-arg PYLIBFRANKA_VERSION=0.18.0 -t r2d2:latest .
+   ```
+
+4. **Verify the baked-in version** matches what you recorded:
+
+   ```bash
+   docker run --rm --entrypoint python r2d2:latest -c \
+     "import pylibfranka, importlib.metadata; print(importlib.metadata.version('pylibfranka'))"
+   ```
+
+   (Add `--cap-add=SYS_NICE` if this exec is rejected — see the
+   troubleshooting row above.)
+5. **Bring the station up** as usual (§3) and confirm the DROID driver
+   connects.  A version mismatch surfaces as
+   `IncompatibleVersionException` at connect, which reports **both** the
+   libfranka version in the image and the FCI server version in the
+   control box — use those two numbers with the table above.
+
+### Version-mismatch troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `IncompatibleVersionException` in the DROID station logs | pylibfranka's bundled libfranka doesn't match the control box's FCI server | Read the two versions from the exception, map them through the table above, and rebuild with the matching `PYLIBFRANKA_VERSION` (or update the control box via Desk) |
+| The franky-based `franka` station stops connecting after an FCI update | The control box moved outside franky's bundled range (0.7.1–0.18.0) | Either keep the FCI server within that range or use the `droid` station for the arm (the recommended path going forward) |
