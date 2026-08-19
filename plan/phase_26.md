@@ -688,3 +688,20 @@ and a 0.5 s restart backoff (no more machine-gun restarts, interruptible
 on disconnect).  Droid plugin suite: 32.  Next hardware run will show
 which reflex/error kills the loop and whether the hold path (no client)
 stays put.
+
+## Follow-up: idle-hold data identifies stale payload (2026-08-19)
+
+The 60 s idle run (no client) was decisive.  The loop held with zero
+failures the whole time, but the arm moved 0.28 rad on j4 within the
+first 5 s and then held rock-steady — equilibrium identification from
+the diag logs: spring = K·(q_des−q) ≈ −6.95 Nm on j4 balances a model
+gravity of 7.5 Nm, i.e. the model over-compensates the elbow by ~7 Nm
+(≈1.6 kg at 0.45 m).  The configured Desk payload is **heavier than the
+mounted hardware** (likely stale from the previous end-effector) — the
+arm rises until the spring's back-pull cancels the excess.  Two
+remedies shipped: (1) the canonical fix is the Desk end-effector
+payload; (2) the station config now supports ``payload_mass_kg`` +
+``payload_com_m`` overrides, applied through the model's explicit
+mass/CoM gravity overload (config-driven stations own their payload).
+4 new tests (override feedforward + validation + config); droid plugin
+suite now 34.
