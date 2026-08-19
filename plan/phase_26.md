@@ -475,3 +475,17 @@ bug: c3po followed the advertised URL's host (the station's static IP)
 even when the client reached r2d2 via another address — it now uses the
 client's host and the advertised port.  E2E coverage: record → download
 → NUC directory gone; refusal while recording; unknown-name ack.
+
+## Follow-up: download hang — step() never returns without observations (2026-08-19)
+
+The rollout client hung after ``dataset_ready``: the wait drained with
+``step(None)``, but ``step()`` only returns on the next Observation —
+and after ``stop_recording`` r2d2 stops observations while camera
+frames keep streaming at 30 fps, so the drain looped on binary frames
+forever.  The fake stations in tests had no cameras, masking it.
+Fixed with a new c3po API ``Robot.wait_for_status(event, timeout)``
+(ingests while frames stream; returns on the status; raises only on
+real disconnection) and made both fakes realistic — the c3po mock
+server stops observations after stop_recording but keeps camera frames
+and pushes the recording statuses, and the r2d2 DROID E2E fake robot
+streams camera frames.  Suites: r2d2 154/5, c3po 143/2.

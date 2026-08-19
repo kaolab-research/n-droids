@@ -524,6 +524,21 @@ when the client connected via another NIC — and ``--record-dest`` gets
 lands at ``<record-dest>/<record-name>/``.  Suites after the change:
 r2d2 154 passed/5 skipped, c3po 141 passed/2 skipped.
 
+**Download hang fix (2026-08-19):** the rollout client hung forever
+after ``dataset_ready`` — the wait drained with ``step(None)``, but
+``step()`` only returns on the next *Observation*, and after
+``stop_recording`` r2d2 stops observations while **camera frames keep
+streaming at 30 fps** — so ``step()`` looped on binary frames forever.
+Tests missed it because the fake stations had no cameras.  Fix: new
+c3po API ``Robot.wait_for_status(event, timeout)`` that ingests while
+frames stream and returns on the status; ``policy_rollout.py`` uses it
+and prints the download target + per-file progress (c3po logger).
+Hardening the fakes so this class of bug can't hide again: the c3po
+mock server now mirrors real r2d2 post-stop behavior (observations
+stop, camera frames continue, ``recording_started``/``stopped``/
+``dataset_ready`` statuses), and the r2d2 DROID E2E fake robot streams
+camera frames.  Suites: r2d2 154/5, c3po 143/2.
+
 ---
 
 #### Phase 19.2 fix note (2026-08-18 — franky exposes no joint limits)
