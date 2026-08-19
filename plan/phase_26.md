@@ -593,3 +593,27 @@ drops pylibfranka entirely.  franka_setup.md §6 rewritten around the
 FCI-5 ceiling (matrix + wheel pinning + why-not-pylibfranka).  Droid
 plugin suite: 28 tests.  Next: full sweep + hardware validation with
 the rebuilt image (torque loop still unproven on the real arm).
+
+## Follow-up: first droid.sh launch — gripper probing + Affine API (2026-08-19)
+
+The first real launch surfaced two franky-2.0-migration bugs (both
+found by hardware, fixed test-first):
+
+1. **Gripper port probing.**  r2d2 passes the station's ``gripper:``
+   block to the droid driver as a raw dict (draccus leaves nested
+   configs unparsed), but the driver read ``com_port`` etc. with
+   ``getattr`` — on a dict that yields ``None``, so
+   pyrobotiqgripper fell back to auto-detection and probed every serial
+   port at startup (``Could not configure port`` noise on
+   /dev/ttyS0-S1; the known slow/noisy pattern documented for the
+   franka plugin).  Fixed: ``connect()`` normalizes a dict gripper
+   block into the shared ``GripperConfig`` before use (schema default
+   ``robotiq`` preserved for typeless dicts).  2 new tests; droid
+   plugin suite now 30.
+2. **``Affine.translation`` is a property in franky 2.0** (read-only),
+   not a method as in 1.x — ``state.O_T_EE.translation()`` raised
+   ``TypeError: 'numpy.ndarray' object is not callable`` at connect.
+   Fixed in both drivers (droid ``_publish_state`` + workspace
+   fallback; franka workspace check) and the fakes were made faithful
+   (property, not method) so this class of bug fails in CI instead of
+   on the arm.  franka plugin: 67 tests.
