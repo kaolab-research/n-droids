@@ -637,3 +637,31 @@ Fake model in the conftest; 2 tests assert the feed-forward on the seed
 and on every tick (droid plugin suite still 30).  The mid-run
 "control loop ended" at 22:41:43 was the FCI terminating the loop as
 the arm sagged — expected gone with gravity; re-verify on hardware.
+
+## Follow-up: plugin discovery naming + gravity-fix not in image (2026-08-19)
+
+Re-run after the gravity fix showed identical behavior, and the user
+spotted that the startup log never lists the droid plugin.  Two
+findings:
+
+1. **Discovery naming.**  LeRobot's ``register_third_party_plugins()``
+   matches the raw dist ``Name`` field against the underscore prefix
+   ``lerobot_robot_`` — ``lerobot-robot-droid`` (dashes) silently
+   failed the check while ``lerobot_robot_franka``/``lerobot_camera_zed``
+   (underscores) passed.  The droid robot still worked: r2d2 imports
+   ``lerobot_robot_droid.config_droid`` directly into its own registry
+   (proven by the "DROID robot connected / impedance loop started"
+   lines, which come from that driver — the same driver that moves the
+   gripper), so the missing log line was cosmetic.  Fixed anyway for
+   consistency: project renamed to ``lerobot_robot_droid`` + a
+   packaging regression test (droid suite now 31).
+2. **The rebuilt image.**  The gravity fix changed no startup log
+   lines, so the re-pasted logs cannot discriminate old vs new code —
+   the identical behavior is consistent with the pre-fix image still
+   running (``docker build`` is the step that bakes the plugin code
+   in; ``droid.sh`` only restarts the container).  Added a
+   discriminating diagnostic: the loop-start log now prints the first
+   gravity torque vector ("gravity torque: [...] Nm"), so the next run
+   self-evidences the fix.  Container-side check before rebuilding:
+   ``docker exec r2d2-droid grep -c tau_ff /usr/local/lib/python3.12/
+   site-packages/lerobot_robot_droid/droid.py`` (0 = old image).
