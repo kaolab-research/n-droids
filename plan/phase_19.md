@@ -449,6 +449,48 @@ requested open-loop horizon, and raises an informative error for
 non-8-wide chunks.  The fake policy emits 15-step chunks to mirror the
 real model; unit tests cover the validation (r2d2 151 passed/5 skipped).
 
+#### DROID control-pipeline deep dive (2026-08-19 — grasp attempts hover short)
+
+π0.5 approached objects but hovered short and the gripper alternated
+part-close/open.  Deep-dived the original DROID pipeline from source
+(``droid/franka/robot.py``, ``launch_robot.sh``, ``robot_ik_solver.py``,
+openpi's model/image code) and identified where we differ:
+
+1. **Controller**: DROID runs a **1 kHz joint impedance controller**
+   (polymetis ``start_cartesian_impedance``) whose desired joint
+   positions are updated at 15 Hz from ``delta + q_current`` — full
+   dynamics, no velocity/acceleration scaling factor, and the
+   impedance pull preserves the commanded joint-space direction.  Ours
+   is a 15 Hz preempted Ruckig ``JointMotion`` with
+   ``relative_dynamics_factor`` scaling velocity/acceleration/jerk to
+   5–10% — 10–27× slower, and the motion generator clips **each joint
+   independently**, distorting the commanded direction (each joint
+   saturates at its own cap).  The distortion makes fine
+   approach/correction converge slowly — the arm hovers short of the
+   object while the policy keeps commanding.
+2. **Gripper**: same absolute [0,1] semantics and the same 0.5
+   binarization as openpi's reference client; DROID drives its gripper
+   gently (0.05 m/s, 0.1 N) vs our Robotiq speed 150/force 100.  The
+   part-close/open alternation is the *policy retrying* a grasp the arm
+   never reached — a symptom, not a gripper bug.
+3. **Images match**: openpi training and inference both use
+   ``resize_with_pad`` to 224 — our client pipeline matches.
+4. Chunk staleness/latency are shared with openpi's own example
+   (8-step open-loop horizon, ~60 ms infer) — not a difference.
+
+**Fix implemented (test-first): direction-preserving uniform scaling.**
+``_send_droid_action`` now scales the whole velocity delta by one
+factor so no joint exceeds its dynamics-capped per-step velocity budget
+(measured inter-action dt, clamped to the 15 Hz contract), matching
+DROID's whole-vector normalization semantics — a slowed but
+direction-faithful command.  The reject-and-hold joint-limit check is
+unchanged.  ``test_franka.py``'s capped-reference model updated to
+match (franka plugin 87 tests).  Recommendation for grasping runs:
+raise ``dynamics_factor`` toward **0.2** (≈0.44 rad/s — still modest;
+DROID runs full dynamics) and retest the hover; ``policy_rollout.py``
+gained ``--gripper-threshold`` (default 0.5) to experiment with the
+binarization point if part-close/open flutter persists.
+
 #### Second rollout follow-up (2026-08-18 — ZED channels were BGR)
 
 The rollout ran but the policy confused red and blue.  Root cause: the

@@ -489,3 +489,21 @@ real disconnection) and made both fakes realistic — the c3po mock
 server stops observations after stop_recording but keeps camera frames
 and pushes the recording statuses, and the r2d2 DROID E2E fake robot
 streams camera frames.  Suites: r2d2 154/5, c3po 143/2.
+
+## Follow-up: DROID control deep dive — direction-preserving scaling (2026-08-19)
+
+π0.5 hovered short of grasp targets; the gripper alternated
+part-close/open.  Source-level comparison with the original DROID
+pipeline: DROID drives a 1 kHz joint impedance controller with full
+dynamics (no scaling factor), so its whole-vector velocity semantics
+preserve direction; our preempted Ruckig motion with a
+``relative_dynamics_factor`` clips each joint independently — slower
+and direction-distorting, which explains the hover.  The gripper
+flutter is the policy retrying grasps the arm never reached (same 0.5
+binarization as openpi's reference).  Fix: the driver now scales the
+velocity delta **uniformly** to the dynamics-capped per-step budget
+(direction preserved), with the analysis script's capped-reference
+model updated to match.  ``policy_rollout.py`` gained a
+``--gripper-threshold`` knob.  Next hardware step: try
+``dynamics_factor ≈ 0.2`` for grasping rollouts (DROID runs full
+dynamics; 0.2 ≈ 0.44 rad/s is still modest).
