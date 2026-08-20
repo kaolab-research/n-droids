@@ -705,3 +705,22 @@ payload; (2) the station config now supports ``payload_mass_kg`` +
 mass/CoM gravity overload (config-driven stations own their payload).
 4 new tests (override feedforward + validation + config); droid plugin
 suite now 34.
+
+## Follow-up: payload specs researched; state-payload diag added (2026-08-19)
+
+The user applied the DROID example end-effector JSON (mass 0.9 kg,
+CoM [0,0,0.057], from frankarobotics/external_gripper_example).  That
+file is the **gripper-only** spec; Robotiq's official TCP/CoM table
+(V1.1) gives 2F-85 alone = 921 g at [0,0,60] mm and Camera+2F-85 =
+1000 g at [-1.3, 1.3, 55.9] mm — so the correct entry for the current
+stack (2F-85 + ZED mini + mount) is ≈1.0 kg at ≈[0,0,0.056] m.  A
+payload error of this size produces <1 Nm at the elbow — it cannot
+explain the observed ~26 Nm residual, so the payload *magnitude* is
+probably not the whole story; either the Desk change didn't reach the
+FCI state (stale heavier entry still active) or the settle pose is
+contact-supported.  The periodic diag line now logs the FCI-reported
+``m_total``/``F_x_Ctotal``/``O_ddP_O`` (what the model actually
+consumes on the FRANKA_0_9 path) plus the end-effector position (to
+detect resting-on-the-table).  The config payload override also
+bypasses the state-payload path entirely, giving a clean A/B test.
+Droid suite: 36.
