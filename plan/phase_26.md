@@ -814,3 +814,17 @@ payload/compensate_coriolis/max_delta_tau knobs (the control box owns
 that math now).  Tests: scripted FakeShimClient + launcher-argv checks;
 27 tests.  franka plugin untouched.  Hardware: rebuild, then the arm
 should hold at the seed immediately — control-box gravity cannot drift.
+
+## Follow-up: shim build fixes — real 0.9.2 API vs stubs (2026-08-20)
+
+The first Docker build of the shim hit two API mismatches the local
+stub check couldn't catch (good — the real headers are the authority):
+0.9.2's ``Errors`` has no integral conversion (serialize via
+``operator std::string`` into fixed 128-byte fields in the shm
+segment), and ``setJointImpedance`` takes STIFFNESS ONLY (the internal
+controller's damping is fixed by the control box — ``impedance_kqd``
+stays in the config for compatibility but is not applied on FCI 5; the
+shim logs this).  Also removed the ``alignas(64)`` the ctypes mirror
+couldn't represent; the layout-parity test now pins every offset from
+an authoritative C++ build (sizeof 696, natural alignment).  Droid
+suite: 28.
