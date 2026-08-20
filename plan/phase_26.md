@@ -790,3 +790,27 @@ bound, velocity gate, integration into the commanded torque); diag
 line now logs the bias and tau_ext_hat.  Droid suite: 48.  Next
 hardware run: the ``bias`` column should settle near a constant, the
 reflex should stop, and the arm should hold at the seed.
+
+## Follow-up: Phase 19.9 — control-box gravity via the torque shim (2026-08-20)
+
+The bias experiment confirmed the root cause class: at the near-vertical
+start pose the model-vs-truth gravity residual (~1 Nm) breaks stiction
+and the arm runs away under its own weight (the reflex was the
+consequence, exactly as the user observed).  First-principles decision:
+stop computing gravity on the host.  libfranka 0.9.2's two-callback
+``control(tau_cb, q_d_cb)`` runs the CONTROL BOX's internal
+joint-impedance controller (its own gravity + friction, gains via
+``setJointImpedance``) with the user torque as overlay — the legacy
+startTorqueControl design — but franky 2.0 doesn't expose it.  Shipped
+``droid_torque_shim``: a ~200-line C++ helper (shim-builder Docker
+stage: g++ + libfranka 0.9.2 headers, linked against the wheel's
+bundled libfranka.so.0.9.2, rpath into franky_control.libs) that owns
+the FCI connection, streams q_des/state/status over a seqlock-protected
+POSIX shm segment, and self-recovers after e-stops.  DroidRobot
+rewritten as the shim's supervisor (launch, shared-memory client,
+monitor thread, DROID pipeline, gripper, rejection/recovery handling);
+all host-side gravity/model/bias code deleted, along with the
+payload/compensate_coriolis/max_delta_tau knobs (the control box owns
+that math now).  Tests: scripted FakeShimClient + launcher-argv checks;
+27 tests.  franka plugin untouched.  Hardware: rebuild, then the arm
+should hold at the seed immediately — control-box gravity cannot drift.
