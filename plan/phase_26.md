@@ -724,3 +724,23 @@ consumes on the FRANKA_0_9 path) plus the end-effector position (to
 detect resting-on-the-table).  The config payload override also
 bypasses the state-payload path entirely, giving a clean A/B test.
 Droid suite: 36.
+
+## Follow-up: Desk payload confirmed applied; model gravity still wrong (2026-08-20)
+
+Run A confirmed the Desk entry reached the FCI: state reports
+``m_total=0.9``, ``F_x_Ctotal=[0,0,0.057]``, ``O_ddP_O=[0,0,-9.81]`` —
+all exactly the DROID example values, and Robotiq's own table confirms
+the 2F-85-only spec (921 g, CoM [0,0,60] mm); the correct total for the
+stack (with ZED mini) is ~1.0 kg (Robotiq's Camera+2F-85 row).  The
+arm STILL folded up 47 deg on j4 and settled mid-air (ee z = 1.005 m —
+no table contact) with a −20 Nm spring against the model's +13.3 Nm:
+the commanded torque at settle (−7.2 Nm on j4) is inconsistent with any
+torque equilibrium, so either the model gravity is ~2x the arm's true
+gravity or the wire applies something different from the command.
+Verified clean by source: JointReference validation (finite-only),
+set_reference, the impedance law's signs, the Kalman estimator
+(tracks raw measurements), O_ddP_O.  Added ``tau_J`` (measured joint
+torques — what the arm actually experiences) and ``q_est`` to the
+periodic diag: at a static hold, tau_J must equal the commanded torque;
+a mismatch isolates the FCI-side behavior.  Next hardware step: one
+idle run with the new diag, then the K=0 float test if needed.
