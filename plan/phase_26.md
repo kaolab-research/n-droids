@@ -772,3 +772,21 @@ LPF).  ``max_delta_tau`` became a per-update slew clamp scaled to the
 (reject-and-hold remains).  8 new tests (torque law, coriolis, clamp;
 droid suite now 44).  Verification on the next run: ``tau_J`` must now
 match the full commanded torque and the arm must hold at the seed.
+
+## Follow-up: cartesian_reflex named the killer — adaptive gravity bias (2026-08-20)
+
+The SimpleTorqueMotion rewrite proved the torque math reaches the arm
+(seed tau_J ≈ command), but the FCI tripped ``cartesian_reflex`` 0.84 s
+into the run: its external-force estimate sees the mismatch between our
+commanded gravity (franka::Model) and its OWN internal model as a
+phantom end-effector force > 20 N and kills the loop; the restart/reflex
+cycle then shoves the arm into a self-collision wedge (ee z = 1.151).
+Fix: a slow, velocity-gated, bounded gravity bias adapted from the
+FCI's own ``tau_ext_hat_filtered`` (bias += gain·dt·tau_ext_hat,
+gain 2/s, ±8 Nm bound, 0.05 rad/s gate — converges to the FCI's model
+with a 0.5 s time constant).  Real contacts spike faster than the bias
+moves, so collision safety is preserved.  4 new tests (convergence,
+bound, velocity gate, integration into the commanded torque); diag
+line now logs the bias and tau_ext_hat.  Droid suite: 48.  Next
+hardware run: the ``bias`` column should settle near a constant, the
+reflex should stop, and the arm should hold at the seed.
