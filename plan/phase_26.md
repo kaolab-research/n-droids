@@ -744,3 +744,31 @@ torques — what the arm actually experiences) and ``q_est`` to the
 periodic diag: at a static hold, tau_J must equal the commanded torque;
 a mismatch isolates the FCI-side behavior.  Next hardware step: one
 idle run with the new diag, then the K=0 float test if needed.
+
+## Follow-up: ROOT CAUSE FOUND — franky Kalman state freezes; loop owns torque (2026-08-20)
+
+The ``tau_J`` column cracked it.  At the mid-air settle pose the
+measured joint torques tracked ``tau_g`` alone on every joint
+(j4 +13.73 vs +13.18, j2 −12.1 vs −10.85, …): the impedance motion's
+spring and damping terms never reached the arm.  Source walkdown:
+franky's impedance motions compute their law against franky's internal
+Kalman-filtered state (``robot_state_estimator.update(rs, model)`` in
+``moveInternal``), while the Python-visible ``robot.state`` is the raw
+buffer — and on the FCI-5 arm that filter freezes near the seed (its
+process variances are too small to track the real motion), so
+``q_est ≈ q_seed`` ⇒ spring ≡ 0 ⇒ the arm gets only the feedforward
+and drifts until ``g_model(q) ≈ g_true(q)``.  That explains every
+observation since the gravity fix (drift direction, always the same
+settle neighborhood, the pre-backoff machine-gun restarts as the FCI
+killed a loop whose torques disagreed with its own model).
+
+Fix (polymetis-faithful): the driver now owns the torque math — it
+computes ``τ = K·(q_des−q) − D·q̇ + g(q)`` (+ optional Coriolis) from
+the RAW state via the pure ``compute_impedance_torque`` and streams it
+through franky's ``SimpleTorqueMotion`` at 100 Hz (franky's documented
+pattern; libfranka holds the last command in its 1 kHz loop with the
+LPF).  ``max_delta_tau`` became a per-update slew clamp scaled to the
+10 ms tick; the motion-level joint-limit soft torques are gone
+(reject-and-hold remains).  8 new tests (torque law, coriolis, clamp;
+droid suite now 44).  Verification on the next run: ``tau_J`` must now
+match the full commanded torque and the arm must hold at the seed.
