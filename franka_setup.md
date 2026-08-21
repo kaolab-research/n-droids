@@ -15,9 +15,12 @@ controller with active safety reflexes.  A PC (the NUC) communicates with it
 over Ethernet using **libfranka**, which requires a real-time kernel to maintain
 the 1 kHz communication cycle.
 
-N‑Droids uses the **franky** Python library (which wraps libfranka) to read
+N‑Droids uses the **franky 2.0** Python library (which wraps libfranka) to read
 joint state and send position commands at 50 Hz.  The NUC is a setpoint relay —
-it never runs the low-level 1 kHz control loop.
+it never runs the low-level 1 kHz control loop.  franky 2.x wheels bundle a
+fixed libfranka version that must match the control box's FCI server version:
+the legacy Emika Panda (system 4.2.x) tops out at FCI server 5 → libfranka
+0.9.2, the wheel the r2d2 Dockerfile installs by default.
 
 ---
 
@@ -278,7 +281,7 @@ The arm moves in a gentle sinusoidal pattern.  Press **Ctrl-C** to stop.
 |---|---|---|
 | `Could not connect to Franka` | Control box not powered or wrong IP | Ping `172.16.0.2`; check Ethernet cable |
 | `communication_constraints_violation` | RT kernel not enabled or realtime group missing | Re-check Section 2 |
-| `IncompatibleVersionException` | Wrong libfranka version for your firmware | Franka Panda uses libfranka 0.9.2 — check the Dockerfile |
+| `IncompatibleVersionException` | Wrong libfranka version for your firmware | Franka Panda uses libfranka 0.9.2 (FCI server 5) — the Dockerfile's `FRANKY_LIBFRANKA` build arg must match the server |
 | FCI activation button greyed out | Brakes not unlocked first | Unlock joints, then activate FCI |
 | Arm does not move | FCI not activated in Desk | Go to Desk → Activate FCI |
 | `franky is not installed` in Docker logs | Docker image is stale | Rebuild with `docker build -t r2d2:latest .` |

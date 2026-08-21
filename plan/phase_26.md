@@ -522,3 +522,18 @@ motion, no runtime target updates) — deferred as a future 1 kHz
 an exponential velocity low-pass (``velocity_filter_tau``, default
 1/15 s) and a workspace bounding box (``workspace_pos_lower/upper``)
 that rejects out-of-box motion.  Franka plugin 92 tests.
+
+## Follow-up: torque work branched; main upgrades to franky 2.0 (2026-08-20)
+
+The whole torque-loop saga (DROID robot type → pylibfranka → franky 2.0
+impedance → SimpleTorqueMotion → control-box shim) is preserved on the
+``torque-saga`` branch (r2d2 0844088 / n-droids 3c3889f; ``origin/main``
+still points there).  Main was restored to the working π0.5 rollout
+state (r2d2 422cd61 / docs 5f070e9) and then received the franky **2.0**
+upgrade on its own: the Dockerfile installs the
+``franky_control 2.0.0+libfranka.0.9.2`` cp312 wheel via
+``FRANKY_VERSION``/``FRANKY_LIBFRANKA`` args, the franka plugin adapted
+its one breaking API change (``Affine.translation`` is a read-only
+property in 2.0) and install hints; the rest of the franky surface
+(Robot/Gripper/JointMotion/move/recover_from_errors/state) is verified
+identical in 2.0.  Franka plugin 92 tests, r2d2 154/5 + 165/4.
