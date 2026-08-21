@@ -828,3 +828,23 @@ shim logs this).  Also removed the ``alignas(64)`` the ctypes mirror
 couldn't represent; the layout-parity test now pins every offset from
 an authoritative C++ build (sizeof 696, natural alignment).  Droid
 suite: 28.
+
+## Follow-up: shim hardware verdict — two-callback mode lacks gravity on FCI 5 (2026-08-20)
+
+The shim ran and the arm no longer flared up — but it fell to the
+table with the classic no-gravity signature (weak-spring equilibrium
+~g/K, pushable up, falls back; startup reflexes were the zero-target
+seed hitting joint 4's limit, resolved once the driver wrote the real
+seed).  Verdict: on FCI 5, libfranka 0.9.2's two-callback
+``control(tau_cb, q_d_cb)`` does NOT provide the control box's gravity
+compensation the way the docs suggest — the arm's own position motion
+generator remains the only proven control-box-gravity mode on this arm.
+Pragmatic pivot: ``DroidRobot`` now subclasses the franka plugin's
+hardware-proven ``FrankaRobot`` (Ruckig position backend + the DROID
+interface it already implements); the droid plugin depends on
+lerobot-robot-franka, its config mirrors the franka DROID fields
+(dynamics_factor 0.1, velocity_filter_tau), and station.droid.yaml
+matches the proven station.franka.droid.yaml values.  The torque shim
+stays parked (buildable, layout-tested) for FCI-10-era work.  Droid
+plugin suite: 11 (identity/config wiring + shim channel tests);
+franka suite unchanged.
