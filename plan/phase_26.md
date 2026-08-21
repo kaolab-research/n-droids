@@ -537,3 +537,16 @@ its one breaking API change (``Affine.translation`` is a read-only
 property in 2.0) and install hints; the rest of the franky surface
 (Robot/Gripper/JointMotion/move/recover_from_errors/state) is verified
 identical in 2.0.  Franka plugin 92 tests, r2d2 154/5 + 165/4.
+
+## Follow-up: DROID robot type restored on main (position backend) (2026-08-21)
+
+After the torque-saga branch split, the "DROID as its own unique
+robot" deliverable was re-applied to main in its final, working form:
+``DroidRobot`` subclasses the franka plugin's ``FrankaRobot`` (control
+box's position motion generator — the only gravity mode proven on the
+FCI-5 arm), registered as the ``"droid"`` robot type with its own
+config (gripper defaults to robotiq, dynamics_factor 0.1), plus
+``config/station.droid.yaml`` and ``launch_scripts/droid.sh``
+(container ``r2d2-droid``).  No torque-loop code on main — that all
+lives on ``torque-saga``.  Suites: droid plugin 9, franka 92, r2d2
+154/5 + 167/4.
