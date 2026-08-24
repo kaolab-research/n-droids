@@ -595,3 +595,24 @@ saturated.  station.droid.yaml now runs ``dynamics_factor: 1.0`` (safe
 with the velocity backend's internal acceleration limiting).  Camera
 roles still need the serial->model verification one-liner on the NUC
 (the config comments' mapping was never hardware-verified).
+
+## Follow-up: velocity slew limiting — the real reflex cure (2026-08-24)
+
+Full dynamics (dynamics_factor 1.0) tripped the discontinuity reflexes
+nearly every step with jagged motion: 15 Hz velocity preemption jumps
+the COMMANDED velocity between extremes, so the commanded acceleration
+is discontinuous at every switch — the FCI's checker catches it, and
+DROID never had this problem because its torque loop bounded
+acceleration physically (torque LPF + rate limiting).  Fix: a
+command-level acceleration budget — the commanded velocity is
+slew-limited per joint to
+``|dq_new − dq_prev| ≤ joint_acceleration_limit × dynamics_factor × dt``
+(Panda table, same budget semantics as the velocity caps), and the
+velocity hold widened to the libfranka default (1 s) so a late cycle
+holds instead of stopping.  This emulates DROID's torque-bounded
+acceleration at the command level; the LPF, direction-preserving
+scaling, limits, and workspace box are unchanged.  Franka plugin 93
+tests.  Also: ZED ``get_device_list()`` returns serial/model 0 INSIDE
+the container — run the serial check on the HOST SDK instead; the r2d2
+logs also print each camera's serial at open (wrist first, scene
+second).
