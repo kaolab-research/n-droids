@@ -582,3 +582,16 @@ the camera roles in all three station configs and the README: the
 **ZED-M (14452055) is the wrist camera** and the **ZED 2 (23474280) is
 the scene camera**; depth remains on the wrist.  Franka plugin 92
 tests, full sweep green.
+
+## Follow-up: rollout misalignment deep dive — dynamics, not interface (2026-08-24)
+
+Full contract audit after the velocity-mode fix: action/state/image
+keys, the x0.2 rad/step budget, gripper normalization, and the 15 Hz
+rate all match the DROID/openpi standard.  The 'weird' policy actions
+trace to realized dynamics: DROID ran FULL dynamics (up to ~2.2 rad/s,
+~0.15 rad/step), while our 0.1 dynamics factor capped the arm at
+0.22 rad/s (~0.015 rad/step) — 10x slower, so the closed-loop policy
+saturated.  station.droid.yaml now runs ``dynamics_factor: 1.0`` (safe
+with the velocity backend's internal acceleration limiting).  Camera
+roles still need the serial->model verification one-liner on the NUC
+(the config comments' mapping was never hardware-verified).
