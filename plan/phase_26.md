@@ -616,3 +616,27 @@ tests.  Also: ZED ``get_device_list()`` returns serial/model 0 INSIDE
 the container — run the serial check on the HOST SDK instead; the r2d2
 logs also print each camera's serial at open (wrist first, scene
 second).
+
+## Follow-up: accel-split dynamics + the real protocol gap (2026-08-24)
+
+Two root causes found in the sources:
+
+1. **Reflexes at full dynamics.**  franky's velocity waypoint motion
+   re-seeds Ruckig at every preemption with zero acceleration state, so
+   the commanded acceleration jumps at each 15 Hz switch by the old
+   ramp's magnitude — scaling with dynamics (empirics: 0.5 clean, 0.7
+   marginal, 1.0 constant).  Fix: franky's RelativeDynamicsFactor has
+   independent velocity/acceleration/jerk components — DROID velocity
+   motions now run at (velocity=1.0, acceleration=0.5, jerk=1.0), with
+   the command-stream slew budget using the same 0.5x accel limits, so
+   full velocity dynamics stay under the checker threshold.  New
+   ``acceleration_factor`` config field (default 0.5).
+2. **The 'weird' rollout actions.**  openpi trains the released
+   DROID checkpoints with ``action_space=JOINT_POSITION`` — the policy
+   outputs ABSOLUTE joint position targets (radians) + gripper, not
+   [-1,1] velocities (the DROID TFRecord stores both fields; the loader
+   comment confirms 'absolute joint + gripper position actions').  Our
+   rollout sent those as velocities x0.2 → constant saturated commands.
+   ``policy_rollout.py`` now converts each chunk action:
+   v = clip((target - current)/0.2, -1, 1).  Fake policy updated to
+   emit position targets.
