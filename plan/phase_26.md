@@ -550,3 +550,24 @@ config (gripper defaults to robotiq, dynamics_factor 0.1), plus
 (container ``r2d2-droid``).  No torque-loop code on main — that all
 lives on ``torque-saga``.  Suites: droid plugin 9, franka 92, r2d2
 154/5 + 167/4.
+
+## Follow-up: DROID mode uses joint-velocity control (2026-08-24)
+
+Hardware run on the restored positional backend showed the expected
+"sort of jerky" motion plus ``joint_motion_generator_velocity_/
+acceleration_discontinuity`` reflexes.  First-principles fix: the DROID
+action IS a joint velocity, and the position-target emulation (velocity
+→ ×0.2 rad → Ruckig → preempt at 15 Hz) is what creates profile
+discontinuities at every switch (franky seeds new plans from the
+previous commanded position/velocity, but the acceleration at the seed
+is whatever the new plan needs — the FCI's motion-generator checker
+catches the mismatch).  DROID mode now commands franky's
+``JointVelocityMotion`` (hold 100 ms, per-motion dynamics factor): the
+control box's velocity generator integrates the command with internal
+acceleration limits, so 15 Hz velocity preemption is continuous by
+construction — no replans, no discontinuity reflexes.  Direction-
+preserving scaling, the velocity low-pass, reject-and-hold, workspace
+box, and e-stop handling carry over unchanged (delta → velocity via
+the measured inter-action time).  Franka plugin 92 tests, full sweep
+green.  Hardware verification is the next step; dynamics_factor can be
+raised for more speed while staying smooth.
