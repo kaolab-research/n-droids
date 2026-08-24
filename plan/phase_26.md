@@ -571,3 +571,14 @@ box, and e-stop handling carry over unchanged (delta → velocity via
 the measured inter-action time).  Franka plugin 92 tests, full sweep
 green.  Hardware verification is the next step; dynamics_factor can be
 raised for more speed while staying smooth.
+
+## Follow-up: velocity-motion arg fix + ZED roles swapped (2026-08-24)
+
+First hardware run of the joint-velocity mode crashed at the first
+action: franky 2.0's ``JointVelocityMotion`` takes a ``franky.Duration``
+hold time and ints do not implicitly convert — the driver now passes
+``fx.Duration(100)`` (and the target as an ndarray).  Also corrected
+the camera roles in all three station configs and the README: the
+**ZED-M (14452055) is the wrist camera** and the **ZED 2 (23474280) is
+the scene camera**; depth remains on the wrist.  Franka plugin 92
+tests, full sweep green.
