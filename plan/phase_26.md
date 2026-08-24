@@ -640,3 +640,48 @@ Two root causes found in the sources:
    ``policy_rollout.py`` now converts each chunk action:
    v = clip((target - current)/0.2, -1, 1).  Fake policy updated to
    emit position targets.
+
+## Incident: wall collision — root-cause investigation (2026-08-24)
+
+The rollout "jerked super fast and collided with the wall".  Full
+command-chain audit, first principles:
+
+**The conversion math is NOT the failure.**  Client v = clip((target −
+q)/0.2, ±1) with q fresh from each step's obs → server delta = v × 0.2
+= target − q, budgeted ≤ v_limit × dynamics × dt, accel-slew-limited.
+No sign error, no double application, no stale-q-within-chunk.
+
+**Three real root causes:**
+
+1. **Workspace box disabled.**  ``station.droid.yaml`` had
+   ``workspace_pos_lower/upper`` commented out.  DROID itself ALWAYS
+   ran with this gate — it is the layer that stops exactly this failure
+   mode.  Re-enabled with the DROID-standard box (arm must start inside
+   it; verify/tighten against the real table with get_ee_pos).
+2. **Start-pose mismatch.**  Every DROID episode starts at reset_joints
+   [0, −π/5, 0, −4π/5, 0, 3π/5, 0]; the checkpoint's absolute targets
+   assume it.  From any other pose the conversion pegs at ±1 for the
+   whole open-loop chunk → sustained FULL-speed charge (~2.2 rad/s at
+   dynamics 1.0).  ``policy_rollout.py`` now refuses to start unless
+   every joint is within ``--start-pose-tolerance`` (0.3 rad) of the
+   reset pose (override: ``--allow-any-start-pose``), and prints the
+   first commanded v as a diagnostic.
+3. **Full dynamics during unproven rollout.**  dynamics_factor 1.0
+   meant the runaway ran at full joint speed; the accel-split RDF only
+   bounds the ramp, not the sustained speed.  Dropped to 0.5 pending
+   box + reset-pose validation; 1.0 remains the dataset-standard
+   target.
+
+Also added ``--velocity-actions`` to policy_rollout.py: A/B-tests the
+checkpoint's action-space interpretation (raw [-1,1] velocities vs
+absolute positions) on hardware without code changes — the JOINT_POSITION
+conclusion is source-verified but this makes it empirically checkable.
+
+New unit tests (toy-so101/tests/test_policy_rollout.py, 11 tests):
+conversion inverse/clip/identity, L∞ start-pose error, gate
+pass/refuse/override, CLI wiring, fake-policy boundedness.  r2d2's
+rollout smoke tests now place the fake robot at the reset pose so they
+pass through the gate like a real deployment.
+
+Suites: r2d2 core 154 ✓ (5 skipped), franka plugin 93 ✓, droid plugin
+9 ✓, toy-so101 rollout 11 ✓.
