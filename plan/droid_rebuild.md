@@ -98,6 +98,12 @@ tier-(b) evidence for the Rung A/B decision.
 
 ## Phase 1 — Robot-type collapse (r2d2)
 
+Test-first contract: `plan/droid_rebuild_tests.md` (Suite A: collapse
+invariants, registry, wire-level DROID contract, executor chain,
+reset_arm velocity profile; Suite B: real-DROID-trajectory contract and
+reference-executor fidelity tests).  Tests land before/with the code;
+hardware runs resume only after the suites go green.
+
 One robot, one config, DROID protocol unconditional.
 
 1. Merge `plugins/lerobot_robot_droid` into `plugins/lerobot_robot_franka`:

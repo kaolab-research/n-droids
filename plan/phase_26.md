@@ -737,4 +737,5 @@ exactly the chain our server implements.
 - (c) Observation pipeline: exact key match, images 224x224x3 uint8,
   state shapes 7/1, all finite, sustained rate >= 14.5 Hz.
 
-Implementation plan: plan/droid_rebuild.md (branch ``droid-rebuild``).
+Implementation plan: plan/droid_rebuild.md (branch ``droid-rebuild``);
+the Phase 1 test-first contract is plan/droid_rebuild_tests.md.
