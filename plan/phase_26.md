@@ -685,3 +685,56 @@ pass through the gate like a real deployment.
 
 Suites: r2d2 core 154 ✓ (5 skipped), franka plugin 93 ✓, droid plugin
 9 ✓, toy-so101 rollout 11 ✓.
+
+## Frozen spec: DROID's actual control stack (verified from sources) (2026-08-26)
+
+Verified against droid-dataset/droid (both the 2024-03 dataset-adjacent
+commit ba46d4af and current main), facebookresearch/fairo (polymetis +
+vendored torchcontrol), and libfranka 0.9.2.  This is the behavioural
+fidelity target for the rebuilt DROID station.
+
+**Controller — HybridJointImpedanceControl.**  Polymetis's
+``start_cartesian_impedance()`` and ``start_joint_impedance()`` launch
+the SAME policy (robot_interface.py); DROID calls the former and feeds
+``update_desired_joint_positions()`` — consistent, not a mismatch.  The
+executed control law (torchcontrol policies/impedance.py +
+modules/feedback.py):
+
+    tau = (J^T Kx J + Kq)(q_d - q) + (J^T Kxd J + Kqd)(-dq) + Coriolis + gravity
+
+It is JOINT-space impedance; the Cartesian gains Kx enter only as the
+configuration-dependent stiffness augmentation J^T Kx J (significant:
+comparable magnitude to Kq at typical lever arms).
+
+**Constants.**  hz 1000; Kq [40,30,50,25,35,25,10]; Kqd [4,6,5,5,3,2,1];
+Kx [400,400,400,15,15,15]; Kxd [37,37,37,2,2,2]; torque LPF 100 Hz
+(libfranka control(TorqueControl, limit_rate=true, cutoff=100));
+torque clamps [86 x4, 11.5 x3] Nm; joint vel limits [2.075 x4, 2.51 x3]
+rad/s; workspace box +/-1.0 m (loose); collision thresholds 40 N/40 N;
+safety reflexes on Cartesian/joint pos/vel with margins 0.05/0.2/0.5;
+auto error recovery loop.
+
+**Gravity is host-side.**  franka_panda_client.cpp adds none; libfranka
+torque control is raw (robot.h 0.9.2, issue #98); the RobotModel
+(panda URDF + Desk end-effector payload) computes gravity + Coriolis in
+the policy.  This DISPROVES the torque-saga shim premise ("control-box
+gravity via its internal impedance controller"): FCI impedance mode
+never had box gravity — the saga's four host-gravity attempts failed,
+host gravity itself was never ruled out.
+
+**15 Hz interface.**  DROID's robot_env converted normalized velocities
+to position targets: joint_delta = v x 0.2 (max_joint_delta), |v| <= 1
+normalized first (robot_ik_solver.py), gripper [0,1] absolute.  Targets
+held by the 1 kHz loop (zero-order hold) until the next 15 Hz update —
+exactly the chain our server implements.
+
+**Test tiers with thresholds (the decision instruments).**
+- (a) Offline contract vs real TFRecords: for >=95% of steps,
+  ||position_action_to_velocity(q_tgt, q_obs) - v_rec||_inf <= 0.05.
+- (b) Hardware replay fidelity: median per-step
+  ||dq_real - dq_rec||_inf <= 0.04 rad; p95 <= 0.08; cumulative drift
+  <= 0.15 rad by step 150; reflex count 0.
+- (c) Observation pipeline: exact key match, images 224x224x3 uint8,
+  state shapes 7/1, all finite, sustained rate >= 14.5 Hz.
+
+Implementation plan: plan/droid_rebuild.md (branch ``droid-rebuild``).
