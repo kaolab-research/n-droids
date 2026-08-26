@@ -767,3 +767,31 @@ the suites below are green on real fixtures.
 - **Fixtures:** tests/data/droid/README.md documents the bootstrap
   (export_droid_trajectory.py from the lab TFRecords); Suite B skips
   loudly until real episodes land there.
+
+## Follow-up: homing oscillation diagnosed from logs + box disabled (2026-08-26)
+
+Hardware homing run with per-step pose logging diagnosed the oscillation
+mechanism (not a code typo — loop physics):
+
+- **Deceleration ramp, not lag.**  On the first zero-crossing (step 6)
+  the command reversed (v=-0.129) but joint 3 kept moving positive for
+  ~5 steps with linearly decaying increments (+0.047, +0.038, +0.028,
+  +0.020, +0.009) — the velocity generator shedding +0.75 rad/s at the
+  stacked ramp rate (generator 0.5x accel + driver slew + 100 ms LPF ≈
+  2 rad/s^2 effective).  Overshoot ≈ 0.14 rad = dq^2/2a at a≈2.  The
+  pure-P law (gain 1 in the |err|<0.05 zone) reversed the command
+  faster than the executor can follow → limit cycle; multi-joint phase
+  offsets = the circular EE path; amplitude grew 0.13 → 0.31.
+- **Workspace box tripped too.**  EE z ≈ 0.60-0.64 m at the reset-pose
+  neighborhood = the DROID-standard box's upper z (0.60) → reject-and-
+  hold fired continuously, fighting the client loop.  Box DISABLED in
+  station.droid.yaml pending manual measurement of the real workspace
+  (the collapsed z-bound test pins the disabled state + rationale).
+- **Fix (client):** braking-limited profile v = min(err/0.2,
+  sqrt(2a|err|)/3, scale) + command slew (0.05 v/step) — the command
+  never demands more deceleration than the ~1.5 rad/s^2 (conservative,
+  log-calibrated) the executor can deliver.  Tests extended: the
+  realistic station model (LPF + ramp) now REPRODUCES the old law's
+  oscillation (regression guard) and the new law converges from sampled
+  poses with no overshoot beyond tolerance.  toy 40 tests green.
+- r2d2 core 170 passed / 10 skipped.
