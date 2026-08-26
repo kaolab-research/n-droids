@@ -32,6 +32,70 @@ in phase_26.md; this plan.  Hardware tooling in toy-so101:
 
 Exit: toy suites green; scripts dry-run against the fake policy path.
 
+## Phase 0.5 — NUC operational runbook
+
+Machine roles (unchanged from today's setup):
+
+- **NUC** (10.42.0.1): Docker host.  Attached: Franka control box
+  (172.16.0.2), Robotiq gripper (USB), both ZED cameras (USB).  Host has
+  the ZED SDK + CUDA; only the r2d2 container runs here.
+- **Inference machine** (10.42.0.2, direct Ethernet to the NUC): two
+  environments — the openpi env (policy server, has tensorflow) and the
+  toy-so101 env (c3po clients).  All client scripts run here; nothing
+  robot-facing runs on this machine.
+
+One-time host setup (done; re-run only after reimaging) —
+`franka_setup.md`: RT kernel (`sudo pro enable realtime-kernel`),
+realtime group + rtprio/memlock limits, host ZED SDK, CUDA, NVIDIA
+Container Toolkit, Desk (joints unlocked + FCI mode).
+`network_setup.md`: static 10.42.0.1 (NUC) / 10.42.0.2 (inference);
+`ip addr add` is ephemeral — after a reboot without netplan/NetworkManager
+persistence, re-apply or the client sees "No route to host".
+
+Syncing code to the NUC (never `git pull` on rewritten branches):
+
+    cd ~/r2d2
+    git fetch origin && git reset --hard origin/droid-rebuild
+
+Building the image (on the NUC, in the r2d2 checkout):
+
+    docker build -t r2d2:latest .
+    # --build-arg ZED_SDK_VERSION=<host SDK minor series> only when the host
+    # SDK changes; FRANKY_VERSION/FRANKY_LIBFRANKA default to 2.0.0/0.9.2
+    # (the legacy-Panda pairing).
+
+Launching / restarting:
+
+    ./launch_scripts/droid.sh         # re-creates container r2d2-droid,
+                                      # host network, --restart=unless-stopped
+    docker logs -f r2d2-droid         # camera serials print at open:
+                                      # wrist ZED-M first, scene ZED 2 second
+    docker rm -f r2d2-droid           # stop (droid.sh re-launches it)
+
+Smoke, from the inference machine (toy-so101 env):
+
+    ping 10.42.0.1
+    cd ~/toy-so101 && uv sync
+    uv run python reset_arm.py                              # homes the arm + proves the DROID-mode manifest
+    uv run python replay_droid.py --synthetic --max-steps 60   # pipeline smoke; writes replay_*.csv
+
+Real-data validation (tier b):
+
+    # in the OPENPI env (has tensorflow) — export an episode:
+    python export_droid_trajectory.py --input '<tfrecord glob>' --output ~/episodes
+    # back in the toy env:
+    uv run python replay_droid.py --path ~/episodes/ep_000.npz --max-steps 150
+
+Policy rollout (the end goal):
+
+    # openpi env:  python scripts/serve_policy.py --env droid
+    # toy env:     uv run python policy_rollout.py --prompt "..." [--record ...]
+    #               (start-pose gate + workspace box are the safety invariants)
+
+Hardware session order: reset → synthetic replay → short real episode
+(≥150 steps) → rollout.  Keep every `replay_*.csv` — they are the
+tier-(b) evidence for the Rung A/B decision.
+
 ## Phase 1 — Robot-type collapse (r2d2)
 
 One robot, one config, DROID protocol unconditional.
@@ -40,16 +104,30 @@ One robot, one config, DROID protocol unconditional.
    - delete the droid plugin package; `DroidRobot` logic folds into
      `FrankaRobot` (DROID interface is the only interface: `droid_compatible`
      always true).
-2. `_ROBOT_REGISTRY`: single entry; drop the `"droid"` type.
-3. Configs: `config/station.droid.yaml` → `config/station.yaml` (delete
-   `station.franka.yaml` and any variants).  Keep the workspace box ON
-   (tuned to the real table), dynamics 0.5 → validated later against
-   tier (b).
-4. Launch: `launch_scripts/droid.sh` → `launch_scripts/station.sh`;
-   Dockerfile drops the droid-plugin install step.
+2. `_ROBOT_REGISTRY`: single Franka-family entry; drop the separate
+   `"droid"` type.
+3. Configs — ONE Franka config survives, named **`station.droid.yaml`**
+   (n-droids keeps its per-station config family for the *other*
+   stations; the rebot/so101 configs are untouched):
+   - delete the Franka variants only: `station.franka.yaml`,
+     `station.franka.droid.yaml`, `station.franka.robotiq.yaml`,
+     `station.franka.zed.yaml`;
+   - keep the workspace box ON (tuned to the real table), dynamics 0.5
+     → validated later against tier (b).
+4. Launch — ONE Franka launch script survives, named
+   **`launch_scripts/droid.sh`** (container `r2d2-droid`; its
+   `docker rm -f ... r2d2-franka` cleanup line drops once old
+   deployments are gone):
+   - delete the Franka variants only: `franka.sh`, `franka_droid.sh`,
+     `franka_robotiq.sh`, `franka_zed.sh` (rebot/so101/toy scripts
+     untouched);
+   - Dockerfile drops the droid-plugin install step (merged in 1).
 5. Update r2d2 tests: merge droid-server smoke tests into the franka
-   suite; fake robot keeps the reset-pose initial state; delete the
-   droid plugin venv usage.
+   suite; fake robot keeps the reset-pose initial state; drop the droid
+   plugin venv.
+6. Doc sweep: references to the deleted config names
+   (`station.franka.droid.yaml` in policy_rollout, READMEs, phase logs)
+   → `station.droid.yaml`.
 
 Exit: single `uv`-built image; one config file; all suites green
 (franka + r2d2 core) from one documented command.
@@ -123,7 +201,7 @@ executor as fallback behind the same robot surface).
   Rung A therefore emulates behavior rather than mechanism — which is
   exactly why tier (b) thresholds are the arbiter.
 - **Workspace geometry:** the ±1.0 m DROID box is too loose for our
-  table/wall; the tightened box in station.yaml is our safety reality.
+  table/wall; the tightened box in station.droid.yaml is our safety reality.
 - **TFRecord feature naming** drift between openpi versions — the
   exporter reads defensively (alias lists) and fails loudly.
 - **Rate limit:** station must sustain ≥14.5 Hz; telemetry (Phase 2)
