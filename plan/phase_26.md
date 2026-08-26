@@ -835,3 +835,39 @@ itself reset with a blocking position move.
   discontinuity reflex and dt-hiccup sensitivity remain the Phase 2/3
   telemetry target — the reference harness and tier-(b) thresholds
   already exercise that chain offline.
+
+## Follow-up: real-data verdict — Rung A falsified, Rung B required (2026-08-26)
+
+Three lab fixtures (ep_000/001/002 from the official r2d2_faceblur RLDS,
+loaded via tfds.builder_from_directory after fixing the exporter for the
+nested _VariantDataset steps encoding) produced the first ground-truth
+verdicts:
+
+- **Tier (a) PASSES (21 tests).**  The conversion chain is confirmed by
+  the data itself: pos[t] - qpos[t] = vel[t] x 0.2 - realized_lag[t]
+  (obs is captured during/after the step; the residual IS the arm's own
+  tracking error).  Per-joint regression pins the 0.2 rad/unit-velocity
+  constant and its sign; recorded velocities are normalized (<=1);
+  gripper/delta/finiteness bounds hold.
+- **The dataset contains DROID's own executor-fidelity band:** the
+  recorded arm deviated from its commanded deltas by median ~0.045,
+  p95 ~0.14 rad/step — the reference for tier (b).
+- **Rung A FALSIFIED.**  Replaying the recorded commands through the
+  real driver chain (harness, no hardware) shows the franky velocity
+  executor diverging from the RECORDED trajectory by 0.5-3.3 rad of
+  cumulative drift over 150 steps at EVERY dynamics factor (0.05-1.0).
+  The recorded plant is a soft 1 kHz impedance tracker (realizes only
+  ~25-50% of commanded deltas during teleop transients, settles in
+  ~5-15 steps, reverses slowly); a scalar dynamics knob can match
+  magnitude but never the phase-laggy response.  This also explains the
+  historical wild rollouts: the policy was trained against a sluggish
+  plant and our executor over-executes its commands.
+- **Encoded as gates:** test_reference_executor keeps the
+  model-consistency check (passes at full dynamics) and adds
+  `test_tracks_recorded_trajectory` — the tier-(b) dataset-fidelity
+  gate, xfail(strict=True) with the measured numbers; XPASS = Rung B
+  landed.  Phase 4 (Rung B: the faithful 1 kHz hybrid impedance loop on
+  pylibfranka) is now the ACTIVE plan; the harness + fixtures give a
+  hardware-free acceptance loop for it.  Until then, interim hardware
+  experiments should keep dynamics LOW (~0.1) since the policy expects
+  a sluggish plant.
