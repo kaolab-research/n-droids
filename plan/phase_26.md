@@ -739,3 +739,31 @@ exactly the chain our server implements.
 
 Implementation plan: plan/droid_rebuild.md (branch ``droid-rebuild``);
 the Phase 1 test-first contract is plan/droid_rebuild_tests.md.
+
+## Follow-up: Phase 1 implemented (droid-rebuild) (2026-08-26)
+
+Test-first per plan/droid_rebuild_tests.md; hardware runs stay off until
+the suites below are green on real fixtures.
+
+- **Collapse:** `lerobot_robot_droid` deleted; one robot type ``franka``
+  (DROID protocol unconditional: `droid_compatible` default True,
+  gripper default robotiq, dynamics default 0.1); registry drops
+  ``"droid"``; `station.droid.yaml` (`type: franka`, explicit
+  velocity_filter_tau) + `droid.sh` are the single Franka config/launch;
+  the four franka config/launch variants deleted (rebot/so101 untouched);
+  Dockerfile drops the droid plugin; README/policy_rollout doc sweep.
+- **reset_arm.py wild-motion fix:** homing velocity now clips to
+  +-velocity_scale ITSELF (default 0.25 -> <=0.05 rad/step for ANY
+  error), not +-1 — the earlier formulation still saturated full-scale
+  steps from far poses (the A6 test caught the flaw before hardware).
+- **Suites:** r2d2 core 170 passed / 10 skipped (collapse invariants,
+  droid contract smoke renamed to test_droid_contract.py, B1 trajectory
+  contract skips without fixtures); franka plugin 101 passed / 1 skipped
+  (merged defaults, registry collapse, B2 reference-executor harness —
+  real driver chain vs the frozen 1 kHz hybrid-impedance reference
+  model, J^T Kx J via the Panda DH geometric Jacobian, median<=0.04 /
+  p95<=0.08); toy-so101 38 passed (reset profile + closed-loop sim,
+  replay/export, B3 observation shape pin).
+- **Fixtures:** tests/data/droid/README.md documents the bootstrap
+  (export_droid_trajectory.py from the lab TFRecords); Suite B skips
+  loudly until real episodes land there.

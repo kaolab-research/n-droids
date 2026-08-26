@@ -104,6 +104,12 @@ reset_arm velocity profile; Suite B: real-DROID-trajectory contract and
 reference-executor fidelity tests).  Tests land before/with the code;
 hardware runs resume only after the suites go green.
 
+**Status: implemented** (2026-08-26) — one robot type ``franka``,
+`station.droid.yaml` + `droid.sh` the single Franka pair, franka
+variants deleted, reset_arm velocity-profile fix, Suites A/B landed.
+Remaining: drop real DROID fixtures into `tests/data/droid/` (per its
+README) to activate the Suite B tests; hardware gates are Phase 3.
+
 One robot, one config, DROID protocol unconditional.
 
 1. Merge `plugins/lerobot_robot_droid` into `plugins/lerobot_robot_franka`:

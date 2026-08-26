@@ -20,6 +20,11 @@ frozen spec (phase_26.md) and droid_rebuild.md.
 
 ## Suite A — simulated tests (no hardware, no DROID data)
 
+Suite homes follow the repo's environment split: the r2d2 core venv runs
+without LeRobot/plugins (config tests skip there), the franka plugin
+suite runs in its own venv (has LeRobot 0.6.1), and toy-so101 tests run
+in the toy venv.
+
 ### A1. r2d2 — collapse invariants (`tests/test_station_collapse.py`, new)
 
 File-system-level pins so the collapse cannot silently regress:
@@ -37,7 +42,9 @@ File-system-level pins so the collapse cannot silently regress:
 5. Doc sweep: no `station.franka.droid.yaml` string in r2d2 README /
    toy-so101 scripts.
 
-### A2. r2d2 — registry & robot identity (`tests/test_robot_registry.py`, merged)
+### A2. franka plugin — registry & robot identity
+(`plugins/lerobot_robot_franka/tests/test_registry_collapse.py`, new;
+merged config defaults in `test_config_franka.py`)
 
 6. Registry resolves `"franka"` to the merged class; the class is
    `droid_compatible` (DROID protocol is the only mode).
@@ -123,7 +130,10 @@ action-space confusion in minutes:
   steps; per-step deltas `|q[t+1] − q[t]| ≤ 0.2 + 0.02` (dataset-scale
   contract; flags pathological or mis-parsed data).
 
-### B2. Reference-executor fidelity harness (`tests/test_reference_executor.py`)
+### B2. Reference-executor fidelity harness
+(`plugins/lerobot_robot_franka/tests/test_reference_executor.py` — lives
+in the plugin suite because it drives the REAL `_send_droid_action`
+chain through the plugin's fake-franky plumbing)
 
 The frozen spec becomes **executable test code**: a pure-numpy
 discretization of DROID's actual controller (hybrid joint impedance at
@@ -145,8 +155,9 @@ cannot on the arm.
 
 ### B3. Observation-pipeline shape check (tier c, offline part)
 
-`policy_rollout._build_observation` fed recorded low-dim state +
-synthetic 224×224×3 images must produce exactly the frozen keys
+`tests/test_policy_rollout.py` (toy-so101 — `_build_observation` lives
+there) feeds recorded low-dim state + synthetic 224×224×3 images and
+pins exactly the frozen keys
 (`observation/joint_position`, `observation/gripper_position`,
 `observation/wrist_image_left`, `observation/exterior_image_1_left`,
 `prompt`) with the pinned shapes/dtypes — the same contract the real
