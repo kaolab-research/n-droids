@@ -795,3 +795,43 @@ mechanism (not a code typo — loop physics):
   oscillation (regression guard) and the new law converges from sampled
   poses with no overshoot beyond tolerance.  toy 40 tests green.
 - r2d2 core 170 passed / 10 skipped.
+
+## Follow-up: client-side homing retired — server-side reset (2026-08-26)
+
+The braking/slew fix tamed the homing oscillation but a bounded limit
+cycle persisted (err oscillated 0.03-0.05 rad for ~280 steps) and a
+``joint_motion_generator_acceleration_discontinuity`` reflex + violent
+arm shot ended the run (e-stop).  The command stream at that moment was
+nearly static, so the discontinuity came from INSIDE the velocity chain
+(inter-action dt hiccup scaling the slew budget, or the Ruckig re-seed)
+— and after reflex + automatic recovery the box resumes with stale
+references.
+
+**Structural verdict: client-side velocity-servo homing is retired.**
+Three hardware incidents (wall collision, growing oscillation, reflex
+shot) all trace to closing an autonomous position loop through the
+velocity executor's 15 Hz preemption chain.  First principles: the
+control box's position motion generator is the proven mode (its own
+gravity, one smooth Ruckig trajectory, zero preemption), and DROID
+itself reset with a blocking position move.
+
+- **r2d2:** ``FrankaRobot.reset_arm()`` — ONE blocking
+  ``JointMotion(DROID_RESET_JOINTS)`` (gripper opens first, workspace
+  check, ControlException → recovery + rejection).  The server's
+  ResetEpisode handler runs it in a worker thread BEFORE the episode
+  boundary and emits ``arm_reset_complete`` / ``arm_reset_failed``
+  statuses; the 15 Hz loop keeps streaming obs during the move.
+- **toy-so101:** ``reset_arm.py`` is now a thin wrapper (reset →
+  wait_for_status → one zero-velocity step for the settled snapshot →
+  verify).  The client servo loop (P → braking → slew) and its sim are
+  DELETED (analysis preserved here and in git history); replay_droid
+  reuses the same flow.
+- **Tests:** driver suite 105 (+4 reset_arm tests: blocking motion to
+  the reset pose, gripper open, pre-connect raise, failure recovery);
+  r2d2 core 171 (+1 wire-level test: ResetEpisode → reset_arm call +
+  arm_reset_complete status); toy 33 (thin-wrapper flow against a stub
+  robot: success, timeout, off-target refusal, getattr defaults).
+- **Still open (rollout path, not homing):** the velocity executor's
+  discontinuity reflex and dt-hiccup sensitivity remain the Phase 2/3
+  telemetry target — the reference harness and tier-(b) thresholds
+  already exercise that chain offline.
