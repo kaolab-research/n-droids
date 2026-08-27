@@ -1020,3 +1020,26 @@ post-e-stop reset slammed into a cartesian_reflex.  Root causes:
    the box rejects anyway.
 
 Suites: plugin 142 passed / 4 xfailed; core 192/5.
+
+## Follow-up: stale-zero target slam — the real cartesian_reflex cause (2026-08-27)
+
+The slewed reset STILL reflexed because the slew was initialized from
+the PRE-CONNECT segment state (zeros): the target chain started at
+q=0, far from the arm, and the PD slammed the moment control began
+(run 1 was the arm still in Reflex from the previous session — the
+shim correctly waited; run 2 reflexed on the stale-zero target).
+
+Defense in depth, with the loop as the real-time safety layer:
+
+- control_loop clamps the EFFECTIVE target step to 0.0008 rad/tick
+  (~0.8 rad/s) and initializes it from the first LIVE state — no
+  writer (executor, future r2d2 driver) can ever jump the target;
+- reset_arm waits up to 10 s for the arm to enter control before
+  slewing, initializing q_d from the live state;
+- runbook rule: after any reflex/e-stop, clear the arm state with the
+  enabling device BEFORE re-running (the shim prints MANUAL RECOVERY
+  REQUIRED and waits).
+
+Tests: same-tick clamp semantics vs the reference torque, far-jump
+clamp (5 rad written -> 2 x 0.0008 effective), live-state gating of
+the first reset target.  Plugin 144 passed / 4 xfailed.
