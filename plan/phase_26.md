@@ -1043,3 +1043,17 @@ Defense in depth, with the loop as the real-time safety layer:
 Tests: same-tick clamp semantics vs the reference torque, far-jump
 clamp (5 rad written -> 2 x 0.0008 effective), live-state gating of
 the first reset target.  Plugin 144 passed / 4 xfailed.
+
+## Follow-up: reflex reruns = stale image, not stale analysis (2026-08-27)
+
+The user's logs exonerated their procedure (e-stop released, Desk
+locked/unlocked, FCI cycled) AND exposed the real issue: the line
+`[reset] max err 2.5133` (|zeros - reset|) printed BEFORE `FCI
+connected` is impossible in the fixed code (reset now waits for the
+live state) — the container was running the PREVIOUS build, whose
+zeros-initialized target chain re-triggered the cartesian/power reflex
+on every fresh run regardless of how the reflex was cleared.
+
+Fix: BUILD_TAG ("rung-b-2026-08-27-clamp") printed by executor_smoke
+and checkable in-container without the arm; deployment procedure now
+includes the tag check before any hardware run.
