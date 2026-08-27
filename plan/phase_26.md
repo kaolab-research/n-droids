@@ -1082,3 +1082,25 @@ clamp, not the arm.  Fix: the loop paces the effective target at
 (--target-pace / impedance_target_pace); diagnostics print realized vs
 recorded rad/step per 20 steps.  The tier-(b) replay gate now judges
 whether the paced chain reproduces the recording.
+
+## Follow-up: the real curl root cause — broken kinematics, now fixed (2026-08-28)
+
+The curl survived pacing because the GRAVITY MODEL's kinematics were
+wrong: a hand-derived DH table put the elbow 0.316 m off at q=0
+(horizontal instead of vertical) and links 3-7 COMs were garbled.  The
+model's gravity was wrong by tens of Nm at non-reset configs while
+canceling approximately at the reset pose — which is why the hold
+passed, why the sim was blind (it shared the frames), and why the arm
+drifted ~0.3 rad/s during replays (a ~3 Nm systematic bias).
+
+Fix: PandaModel rebuilt from mujoco_menagerie's canonical panda
+(static body poses/quaternions, correct COMs, flange -45 deg offset)
+plus the hinge-axis reference fix (mujoco joints pass through the
+CHILD frame origin).  Validation: horizontal hand-check 51.93 vs 51.94
+Nm; analytic gravity == finite-difference potential energy at
+vertical/horizontal/reset/random configs (permanent regression
+guards); the impedance-loop reproduction gate PASSES on all three
+fixtures, contact episode included; the reference harness uses the
+fixed model.  BUILD_TAG rung-b-2026-08-27-kinematics.  Hardware
+re-check: hold gate (the reset-pose compensation changed — the correct
+loads are ~10/-24 Nm on the pitch joints), then the replay gate.
