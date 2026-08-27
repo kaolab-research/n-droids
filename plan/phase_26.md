@@ -913,3 +913,46 @@ the controller's compensation to cancel it.
   this ~0.25 plant gain (the policy was trained against it); the
   hardware gravity-acceptance test (hold at reset, sag < 0.02) remains
   the first on-arm gate.
+
+## Follow-up: Rung B transport implemented test-first (2026-08-26)
+
+The 1 kHz transport follows the saga's proven pattern, with the math
+staying in the validated Python module (zero porting risk):
+
+- **shim_protocol.py** — the ctypes shm layout (Target/Torque/State,
+  seqlock per channel, hold-last on torn reads, writer always lands on
+  an even seq) + shim/loop argv builders.  Layout pins: Target 80 B,
+  Torque 64 B, State 600 B, total 760 B — kept in sync with the C++.
+- **control_loop.py** — the 1 kHz process: read state + target, compute
+  the frozen torque via ImpedanceLoop.compute_torque (fresh gains +
+  gravity every tick), write torque; zero-torque when the shim is down;
+  holds last on torn state.
+- **impedance_executor.py** — the driver-side endpoint: process
+  lifecycle (shim + loop), send_droid_action (q_d = clip(q + v x 0.2,
+  limits) — the exact recorded pipeline identity), blocking reset_arm
+  (target the reset pose, poll convergence), state reads.
+- **shim/droid_torque_shim.cpp** — transport-only C++ (libfranka 0.9.2):
+  publish state at 1 kHz inside the torque callback, read tau_des
+  (seqlock, hold-last), return it through control(TorqueControl,
+  limit_rate, cutoff); collision behavior, recovery loop, and a --mock
+  mode (synthetic plant) so the FULL transport runs on the NUC without
+  the arm.  Builds like the saga shim (Dockerfile shim-builder stage).
+- **Tests (31 new):** protocol layout/seqlock/torn-read round-trips;
+  loop-vs-reference torque equality, zero-torque safety, torn-state
+  survival; executor conversion identity vs ALL THREE fixtures
+  (q_d = velocity_to_target(qpos[t], vel[t]) recovers the recorded
+  target chain, contact steps excluded), limit clipping, reset flow
+  against a stub plant, argv plumbing.
+
+NUC checklist (no arm needed for most): build the image; run
+`droid_torque_shim --mock --shm-name test` + `python -m
+lerobot_robot_franka.control_loop --shm-name test` + the executor smoke
+(connect, read state, send actions, reset) — the mock plant converges.
+THEN, with the arm (e-stop discipline):
+1. gravity acceptance: launch shim (real), loop, write target = reset
+   pose, watch state: arm must settle at reset with sag < 0.02 rad and
+   no drift for 30 s (kill switch = stop_request);
+2. tracked move: target reset -> +0.1 rad on joint 1 and back — smooth,
+   no reflex, no oscillation (the calibrated damped loop);
+3. full reset_arm via the executor;
+4. replay_droid on ep_001 (free-motion-dominated) — tier-(b) thresholds.
