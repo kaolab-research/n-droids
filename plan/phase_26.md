@@ -1057,3 +1057,14 @@ on every fresh run regardless of how the reflex was cleared.
 Fix: BUILD_TAG ("rung-b-2026-08-27-clamp") printed by executor_smoke
 and checkable in-container without the arm; deployment procedure now
 includes the tag check before any hardware run.
+
+## Follow-up: verified build — the arm was already in Reflex (2026-08-27)
+
+With the build tag verified, the log showed control() rejected with NO
+motion-aborted line and no jerk: the arm was in Reflex mode BEFORE the
+shim connected.  Desk lock/unlock/FCI cycles do not clear a reflex on
+this box — it needs the error acknowledgment (activation device
+press+release, or Desk's error banner/unlock).  The shim now runs a
+preflight: prints robot_mode, explains recovery when Reflex/UserStopped,
+and waits (500 ms polls) until the mode clears, then starts control
+automatically; reset_arm waits up to 2 min with hints.
