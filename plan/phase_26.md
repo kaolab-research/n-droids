@@ -956,3 +956,24 @@ THEN, with the arm (e-stop discipline):
    no reflex, no oscillation (the calibrated damped loop);
 3. full reset_arm via the executor;
 4. replay_droid on ep_001 (free-motion-dominated) — tier-(b) thresholds.
+
+## Follow-up: Gate 1 hardware run — stable hold, shutdown-jerk bug fixed (2026-08-27)
+
+First real-arm Gate 1 (`--hold-reset 30`):
+
+- **Hold: stable, no drift, sat 0.081 rad short.**  Decomposed exactly
+  like a PD-without-integral plant: joint 6 0.081 rad x Kq6(10) = 0.8 Nm
+  (wrist static friction), joints 2/4 ~0.05/0.025 x 30/25 = ~1.6/0.6 Nm
+  (model-vs-true gravity).  DROID's own plant had identical physics.
+  Gate recalibrated to its actual purpose — catching CATASTROPHIC
+  gravity failure (the saga's 1.5 rad collapse): PASS threshold 0.15 rad
+  with the numbers logged; the tier-(b) replay remains the real
+  fidelity gate.
+- **Shutdown jerk = a bug in executor.stop(): it wrote q_des = zeros
+  (an impossible pose) alongside stop_request** — the loop slammed full
+  PD torque toward q=0 → power_limit_violation reflex.  Fixed: stop()
+  only sets stop_request; the loop exits on the request; the shim ends
+  control() from INSIDE its callback on the same flag (no recovery
+  attempts on stop) — shutdown is now target-free and in-control.
+  Tests pin: request_stop leaves q_des untouched, the loop exits on the
+  request, and executor.stop never writes a target.
