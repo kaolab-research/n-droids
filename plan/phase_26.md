@@ -996,3 +996,27 @@ error demand), progress prints every 1 s, fast-fail after 3 s of
 shim-not-in-control; the shim labels the stop path "(clean)" and logs
 any stale stop_request it zeroes at startup.  The ±0.1 rad tracked
 moves then run against a tolerance the plant can actually meet.
+
+## Follow-up: replay + post-e-stop reset incidents — two structural fixes (2026-08-27)
+
+Replay (first 15 Hz target staircase on hardware) misbehaved and the
+post-e-stop reset slammed into a cartesian_reflex.  Root causes:
+
+1. **Double torque filtering.**  The Python loop applied a 100 Hz LPF
+   AND libfranka applied another (control(..., cutoff=100)) — DROID's
+   stack filtered exactly once (libfranka-side; the policy emitted raw
+   PD+gravity).  The extra lag pushed the closed loop beyond its
+   calibration on target staircases.  Fix: compute_torque(filter=False)
+   in the real-time loop — one filter total, as specified.
+2. **Far target jumps.**  reset_arm wrote the reset pose as a single
+   step; after the e-stop the arm was ~1.5 rad away, so the PD slammed
+   with clamped torques -> cartesian_reflex.  Fix: reset SLEWS the
+   target at the validated 0.05 rad/15 Hz-step pace (a trajectory like
+   DROID's min-jerk reset, never a jump); pinned by a test (first write
+   <= 0.05 rad from the current state).
+3. **Retry spam in manual-recovery states.**  The shim now detects
+   e-stop/reflex errors, logs MANUAL RECOVERY REQUIRED once per state
+   change, and polls at 500 ms instead of flooding AER attempts that
+   the box rejects anyway.
+
+Suites: plugin 142 passed / 4 xfailed; core 192/5.
