@@ -218,3 +218,47 @@ executor as fallback behind the same robot surface).
   exporter reads defensively (alias lists) and fails loudly.
 - **Rate limit:** station must sustain ≥14.5 Hz; telemetry (Phase 2)
   surfaces overruns instead of silently distorting realized deltas.
+
+## Phase 4 runbook (hardware gates) — Rung B transport
+
+Build (NUC, in the r2d2 checkout): `docker build -t r2d2:latest .`
+(the shim-builder stage compiles `droid_torque_shim` against libfranka
+0.9.2 and installs it at `/usr/local/bin/`).
+
+**Phase A — transport smoke, no arm.**  Inside the RUNNING container
+(the mock shim does not touch FCI, so it coexists with the server):
+
+    docker exec -it r2d2-droid \
+        python -m lerobot_robot_franka.executor_smoke --mock
+
+PASS = "Phase A PASS" line; the mock plant converges to the reset pose.
+
+**Phase B — real arm.**  The impedance shim needs the FCI connection
+that the r2d2 server's franky driver holds — stop the server first:
+
+    docker stop r2d2-droid
+    docker run -it --rm --network=host --cap-add=SYS_NICE \
+        --ulimit rtprio=99 --ulimit memlock=102400 \
+        --entrypoint bash r2d2:latest
+
+Inside (Desk: joints unlocked, FCI active; e-stop in reach — the shim's
+stop_request is the software kill switch and Ctrl+C triggers it):
+
+    # GATE 1 — gravity acceptance (sag < 0.02 rad, no drift, 30 s)
+    python -m lerobot_robot_franka.executor_smoke --hold-reset 30
+
+    # GATE 2 — tracked move (smooth, damped, no reflex logs)
+    python -m lerobot_robot_franka.executor_smoke --move-joint1 0.1
+
+    # GATE 3 — blocking reset from an arbitrary pose
+    python -m lerobot_robot_franka.executor_smoke --reset
+
+    # GATE 4 — tier-(b) replay of a free-motion episode
+    docker cp ep_001.npz <container>:/tmp/ep_001.npz   # from the NUC shell
+    python -m lerobot_robot_franka.executor_smoke \
+        --replay /tmp/ep_001.npz --out /tmp/replay.csv
+
+Then `docker start r2d2-droid` to restore the station server.  If GATE 1
+fails (sag), calibrate the payload mass/CoM with the reported numbers;
+GATE 4 passing within median <= 0.04 / p95 <= 0.08 / drift <= 0.15
+flips the `test_tracks_recorded_trajectory` xfail and certifies Rung B.
