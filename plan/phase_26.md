@@ -1068,3 +1068,17 @@ press+release, or Desk's error banner/unlock).  The shim now runs a
 preflight: prints robot_mode, explains recovery when Reflex/UserStopped,
 and waits (500 ms polls) until the mode clears, then starts control
 automatically; reset_arm waits up to 2 min with hints.
+
+## Follow-up: curl root cause measured — target pace now enforced (2026-08-27)
+
+Step response (3 runs): the real arm realizes 0.91-0.93 of a sustained
+step — a fast, faithful tracker (tau ~0.35 s).  The recorded DROID arm
+realized ~25% per 15 Hz step (0.02-0.04 rad/step).  The replay's curl
+(drift 0.53 -> 2.16 rad by step 100) = our arm traveling the recorded
+path at the loop's clamp pace (0.8 rad/s) — ~2.5x the recorded plant's
+realized pace — while the replay's apparent 0.25 'ratio' measured the
+clamp, not the arm.  Fix: the loop paces the effective target at
+0.5 rad/s (0.033 rad/step) = the dataset's realized pace, configurable
+(--target-pace / impedance_target_pace); diagnostics print realized vs
+recorded rad/step per 20 steps.  The tier-(b) replay gate now judges
+whether the paced chain reproduces the recording.
