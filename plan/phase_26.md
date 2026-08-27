@@ -977,3 +977,22 @@ First real-arm Gate 1 (`--hold-reset 30`):
   attempts on stop) — shutdown is now target-free and in-control.
   Tests pin: request_stop leaves q_des untouched, the loop exits on the
   request, and executor.stop never writes a target.
+
+## Follow-up: Gate 2 "failure" diagnosed — reset tolerance vs plant physics (2026-08-27)
+
+The move-joint1 run's real story (the capture hid it — reset_arm
+printed nothing during its 20 s poll, so stderr/stdout lines from ~2 s
+and ~20 s appeared adjacent): the shim never died early.  The arm
+tracked toward the reset pose, settled at its measured static band
+(~0.08-0.13 rad — the Gate 1 physics: wrist friction + pitch model
+mismatch, PD without integral), and reset_arm's 0.02 rad tolerance was
+UNREACHABLE -> 20 s timeout -> shutdown.  The "fatal: stop requested"
+line was the clean-stop path mislabeled (libfranka 0.9.2 propagates the
+callback exception unwrapped).
+
+Fixes: reset_arm tolerance defaults to 0.15 (the measured static band;
+DROID's own reset was a time-based min-jerk move, never a sub-friction
+error demand), progress prints every 1 s, fast-fail after 3 s of
+shim-not-in-control; the shim labels the stop path "(clean)" and logs
+any stale stop_request it zeroes at startup.  The ±0.1 rad tracked
+moves then run against a tolerance the plant can actually meet.
