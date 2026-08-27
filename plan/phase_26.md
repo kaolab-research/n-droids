@@ -871,3 +871,45 @@ verdicts:
   hardware-free acceptance loop for it.  Until then, interim hardware
   experiments should keep dynamics LOW (~0.1) since the policy expects
   a sluggish plant.
+
+## Follow-up: Phase 4 (Rung B) started — control math + gravity validated on real data (2026-08-26)
+
+**pylibfranka dependency conflict CONFIRMED.**  PyPI pylibfranka (0.21.3)
+wheels bundle libfranka >= 0.13.3 (FCI server 7+); the legacy Panda
+(FCI 5, system 4.2.2) caps at libfranka 0.9.2 — no compatible release
+exists and a source backport means maintaining a fork of an obsolete
+API (the saga pivoted for exactly this reason, commit d2bed7b).  Rung B
+transport = libfranka 0.9.2 directly (the saga's proven C++ control-loop
+pattern); franky stays for nothing in the DROID path (one loop does
+DROID actions, reset moves, and safety — polymetis parity).
+
+**New module `lerobot_robot_franka/impedance_loop.py`** — the frozen
+controller math in pure Python: hybrid joint PD (JᵀKxJ + Kq gains),
+100 Hz torque LPF, torque clamps, and host-side gravity from the
+franka_ros URDF masses/COMs + payload (1.0 kg @ [0,0,0.056] flange).
+The offline tests found and fixed two real gravity bugs before any
+hardware: link-*i* COMs live in frame *i+1* (not *i*), and the
+geometric Jacobian must be truncated to the joints each COM depends on
+(proximal links were "pulling" 22 Nm on the wrist); plus the plant
+physics fix — the simulated body must FEEL the world's gravity pull for
+the controller's compensation to cancel it.
+
+**Real-data verdicts (the three fixtures):**
+- Gravity sanity: max |tau_g| 21.3 Nm (joint 3) / 11.7 Nm (joint 5 —
+  just over DROID's 11.5 clamp, which the recorded arm demonstrably
+  held, so the model is within a few percent; hardware calibration
+  settles it).  Exact-zero on the vertical axes at the reset pose.
+- Offline sag gate PASSES: the plant holds the reset pose with
+  host-side gravity (sag < 0.02 rad over 1 s).
+- **The dataset's plant gain, measured: the recorded arm realizes only
+  0.21-0.28 of each commanded delta at the MEDIAN (p90 0.37-0.44).**
+  The impedance loop with damping_scale 2.5 reproduces that
+  distribution, and ep_001/ep_002 replay within the tier-(b) thresholds
+  (drift 0.01-0.09 rad).  ep_000's reproduction is xfail: its long
+  press-against-the-pot segment makes contact transitions overlap the
+  free-motion distribution — unjudgeable for a free-space model (kept
+  for gravity tests).
+- Implication for hardware: the Rung B real-time loop must reproduce
+  this ~0.25 plant gain (the policy was trained against it); the
+  hardware gravity-acceptance test (hold at reset, sag < 0.02) remains
+  the first on-arm gate.
