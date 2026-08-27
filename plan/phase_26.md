@@ -1104,3 +1104,16 @@ fixtures, contact episode included; the reference harness uses the
 fixed model.  BUILD_TAG rung-b-2026-08-27-kinematics.  Hardware
 re-check: hold gate (the reset-pose compensation changed — the correct
 loads are ~10/-24 Nm on the pitch joints), then the replay gate.
+
+## Follow-up: residual bias calibration + joint-limit recovery (2026-08-28)
+
+Hold with the corrected model: settled 0.172 rad (joint 4 = -4.3 Nm of
+residual compensation error via Kq4 x 0.173; joints 2/6/7 ~1 Nm) —
+payload/COM approximation + friction.  The same bias drifted the replay
+toward the base -> joint_position_limits_violation reflex (e-stop
+cycles cannot clear that class: the box must drive the arm back inside
+the limits).  Fixes: per-joint gravity bias (--gravity-bias /
+impedance_gravity_bias) + --calibrate-hold gate that measures and
+prints the exact bias vector; the shim attempts AER for joint-limit
+reflexes.  Next hardware steps: calibrate-hold -> set the bias ->
+hold gate -> replay gate.
