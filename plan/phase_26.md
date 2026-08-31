@@ -1169,3 +1169,38 @@ verify the tag, and BEFORE replaying check what the arm was pressing
 against at q1 ~ -0.154 (table edge / object / cable) — the recorded
 start pose must be physically reachable or the episode can't be
 replayed faithfully.
+
+## Follow-up: table crash — pose-dependent residual + envelope watchdog (2026-08-29)
+
+The second replay drove the flange into the table (cartesian_reflex at
+step ~47, flange z=0.086 m).  CSV analysis: x/y tracked the recorded
+path within 1-2 cm while z sagged ~10 cm FROM THE START — the slew
+accepted a mid-swing 0.148 rad static sag (q3/q6, both lower the
+flange), and the replay descended from there.  The implied residual is
+pose-dependent (~4-8 Nm growing through the descent); a constant bias
+cannot cover it.  Commanded torques stayed moderate (<= 18 Nm) — no
+runaway command; this is compensation error, not control instability.
+
+Fixes:
+1. Settle-aware convergence: reset/slew now require a STATIONARY arm
+   (0.6 s, <= 0.01 rad) inside tolerance before declaring convergence —
+   the mid-swing acceptance is gone.
+2. Path calibration: --calibrate-path holds poses along the recorded
+   trajectory (default 5, including the start) and iterates
+   off -= (settled - qpos) to a fixed point per hold (measuring at the
+   settled pose biases the offset by ~(dres/dq)/Kq; the iteration
+   removes it).  --replay --path-calibration FILE adds the interpolated
+   offsets to the written targets (the loop is untouched).  Sim gate:
+   0.41 rad uncorrected drift -> 0.018 rad calibrated.
+3. Envelope watchdog in --replay: aborts when flange z < recorded
+   z - 0.08 m (or below --z-floor, default 0.10) or joint drift
+   > 0.20 rad — the crash run would have aborted ~15 steps before the
+   table.  The replay CSV now also logs ee_x/ee_y/ee_z (the REAL FCI
+   flange pose) so the next run discriminates model-FK error vs
+   gravity residual directly.
+
+BUILD_TAG rung-b-2026-08-29-envelope.  Next hardware steps: rebuild,
+verify the tag, then calibrate-path -> replay with the calibration.
+Also report what the arm touched at t~46 (flange [0.51, 0.15, 0.086] m
+base frame) and, if possible, measure the table height relative to the
+robot base.
