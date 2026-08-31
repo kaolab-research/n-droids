@@ -1350,3 +1350,15 @@ CSV-vs-fixture lag measurement: tau = 0.28 s at damping 1.0 (lag
 k=2).  Lag-model sim: k=4 -> drift 0.063; k=3 -> 0.073; k=2 -> 0.095.
 Next run: --damping-scale 1.0 --lookahead 4 (flags already in the
 image — no rebuild).
+
+## Follow-up: speed-adaptive look-ahead (2026-08-29)
+
+k=4 still lagged the rise (drift 0.201 at step 94): the lag is
+tau x velocity and tau is POSITION-DEPENDENT — 0.28 s on the opening
+descent, ~0.44-0.53 s on the rise out of the deep pose (the J^T Kx J
+stiffness shrinks when the arm is folded low, softening the plant).
+A fixed look-ahead cannot cover both.  Added --lag-gain: k(t) =
+round(GAIN x recorded step size), capped at 8 — the look-ahead now
+scales with the speed like the lag does.  Sim: gain 100 -> drift
+0.067 (tau 0.28) / 0.118 (tau 0.40).  Next run: --damping-scale 1.0
+--lag-gain 100.
