@@ -1281,3 +1281,32 @@ calibration sessions (--hold-step 0 9 18 26; then the default),
 paste the logs with tau_J; then fit the payload (Robotiq + ZED mass
 and COM) from the clean high-pose measurements before touching the
 deep region again.
+
+## Follow-up: the settle mystery is SOLVED — PD+gravity equilibrium, not a fault (2026-08-29)
+
+The diagnostics (loop tick 620-633 Hz, chase lag 0.0000, tau_J at the
+settles) settled it: at every settle K*(q_d - q) = -(g(q) + bias) to
+within ~1-2 Nm — the arm rests EXACTLY at the controller's static
+equilibrium, and tau_J reads the pure gravity load (correlation
+0.94-1.00 with the model, means within 0.3 Nm).  No brakes, no dead
+loop, no chase failure.
+
+The controller is a plain PD + gravity feedforward WITHOUT integral
+action, so its equilibrium is NOT the target:
+q* = q_d + K^-1 (g(q*) + bias) — the arm sags below the target by the
+gravity/stiffness ratio (0.12-0.35 rad at the holds).  That sag is
+what --calibrate-path measures and corrects: the fixed point converges
+to off = -K^-1 (g+bias), which is why every hold ended with the settle
+ON the recorded pose and the residual ~0.5 Nm.  The calibration files
+are valid; the gravity model itself is correct (the Robotiq+ZED
+payload appears only through the sag, absorbed by the offsets — a
+payload-parameter fit remains a later refinement for live rollouts,
+not a prerequisite for tier-(b)).
+
+Next: merge cal_a + cal_b into one file and run the replay with
+--path-calibration.  The offsets interpolate across the unmeasured
+deep region (t 27-101) — smooth, since g varies smoothly — with the
+adaptive z-margin and floor guarding.  Stand at the e-stop for the
+deep section: the recorded contact poses press the gripper onto the
+table BY DESIGN (the recorded robot did the same at the same
+geometry).
