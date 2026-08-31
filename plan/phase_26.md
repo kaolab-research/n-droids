@@ -1222,3 +1222,26 @@ now also guards the slew itself (slew_to/reset_arm z_floor param), so
 a deep uncorrected hold aborts mid-motion instead of reaching the
 table; the replay keeps the full margin check.  BUILD_TAG
 rung-b-2026-08-29-calfloor.
+
+## Follow-up: hold-37 stall abort — calibration tolerance vs the measurement (2026-08-29)
+
+calibrate-hold behaved (raw DROID-reset sag 0.15 rad; printed bias
+matches kq x err exactly).  calibrate-path progressed: hold 0 measured
+(~0.14 rad) and refined below 0.02; hold 37 (flange z 0.216) approached
+to 0.19 rad, then relaxed to its static attractor 0.30 rad from the
+target — the workspace residual at the deeper pose is ~7.5 Nm, ~2x the
+start pose's.  The stall detector (tolerance 0.20) vetoed the very
+measurement the hold exists to take.
+
+Fix: calibration slews now use tolerance 0.50 (and the post-settle
+drift bound 0.50) — static sag up to ~12.5 Nm on q3 is the
+measurement, not a stall; beyond that the arm is pressing and the
+stall detector still aborts.  The z floor still guards the descent
+mid-slew.  BUILD_TAG rung-b-2026-08-29-cal3.
+
+Next hardware step: same two commands.  Expect hold-37 to measure
+~0.3 rad and the refinement to land it.  Paste the per-hold residuals:
+if they keep growing (e.g., > 10 Nm at the deep holds), switch from
+per-path offsets to model-parameter identification (payload mass/COM
+fit from the hold data) — the principled fix for a model whose gravity
+error grows through the workspace.
