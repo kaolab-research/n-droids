@@ -1117,3 +1117,14 @@ impedance_gravity_bias) + --calibrate-hold gate that measures and
 prints the exact bias vector; the shim attempts AER for joint-limit
 reflexes.  Next hardware steps: calibrate-hold -> set the bias ->
 hold gate -> replay gate.
+
+## Follow-up: replay started from the wrong pose — ep_001 is not reset-anchored (2026-08-28)
+
+The streamed CSV settled it: recorded qpos[0] = [0.086, -0.300, 0.307,
+-2.122, -0.143, 1.762, 0.205] — 0.54 rad from the reset pose — so the
+replay's persistent 0.5-0.7 |q-q_rec| offset was the un-verified start
+pose (the re-anchored chain preserves any start offset forever), not a
+control error.  Fixes: the replay slews to the recorded qpos[0] first
+(slew_to parameterized from reset_arm); the default target pace drops
+to 0.3 rad/s (0.5 over-realized the episode's ~0.017 rad/step realized
+pace by ~1.5x).  BUILD_TAG rung-b-2026-08-28-startpose.
