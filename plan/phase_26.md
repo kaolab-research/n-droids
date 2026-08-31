@@ -1128,3 +1128,44 @@ control error.  Fixes: the replay slews to the recorded qpos[0] first
 (slew_to parameterized from reset_arm); the default target pace drops
 to 0.3 rad/s (0.5 over-realized the episode's ~0.017 rad/step realized
 pace by ~1.5x).  BUILD_TAG rung-b-2026-08-28-startpose.
+
+## Follow-up: replay still wrong — root cause found and fixed (2026-08-29)
+
+The start-pose CSV (live steps 1-102) settled both failures:
+
+1. Replay drift: the executor re-anchored each target to the LIVE state
+   (q_d = q_state + v x 0.2).  Any unmodeled residual (the calibrated
+   bias is only exact at the reset pose) became a permanent per-step
+   drift: sag -> anchor to the sagged position -> sag again.  q5 fell
+   0.9 rad while commanded UP; q3/q4 rose against their commands;
+   |q-q_rec| grew ~0.013 rad/step -> 1.47 by step 100.  The 0.02
+   rad/step pace clamp also flattened the speed profile, so contact
+   steps (recorded arm pressing, realized ~0) were plowed through at
+   full pace.
+   Fix: ABSOLUTE replay — write the recorded position chain verbatim
+   (send_absolute_target).  The recorded deltas are then reproduced by
+   construction; bias residuals become bounded static offsets
+   (residual/Kq ~ 0.02-0.06), not drift.  The loop's step cap rises
+   0.3 -> 1.5 rad/s (0.1 rad/step): the recorded fastest step is
+   0.073 rad, and the cap's job is bounded tracking error (a far jump
+   stays a bounded slew), not throttling.  Also fixed: run_loop
+   ignored its target_pace argument.  Sim gate (B1, real clamp code +
+   first-order plant with bias residuals): absolute replay passes
+   tier-(b) with ~10x margin on all three fixtures; the pre-fix
+   re-anchored chain fails drift by ~2-4 rad — the discriminator is
+   pinned as a regression test.
+
+2. Reset stall at 0.159 rad: the model's gravity is exonerated (q1
+   gravity == 0 everywhere, as physics demands for a vertical axis) —
+   the loop demanded ~5.9 Nm on q1 (spring 4.4 + bias 1.5) and the arm
+   didn't move: mechanical contact at q1 ~ -0.154 (flange
+   [0.43, 0.18, 0.43] m).  The old reset then 'converged' by creeping
+   0.003 rad under the 0.15 tolerance — pressing at ~6 Nm for 10 s.
+   Fix: stall detector — a stationary arm above tolerance for 4 s
+   aborts loudly (obstruction or bad bias; never creep-to-converge).
+
+BUILD_TAG rung-b-2026-08-29-absreplay.  Next hardware step: rebuild,
+verify the tag, and BEFORE replaying check what the arm was pressing
+against at q1 ~ -0.154 (table edge / object / cable) — the recorded
+start pose must be physically reachable or the episode can't be
+replayed faithfully.
