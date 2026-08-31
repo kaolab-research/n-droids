@@ -1387,3 +1387,27 @@ sags by the payload load, the FCI covers the bare arm only and the
 remaining step is a fitted payload gravity term (the 27-hold
 measurements now have a clean interpretation).  BUILD_TAG
 rung-b-2026-08-29-purepd.
+
+## MILESTONE: tier-(b) replay CERTIFIED on ep_001 (2026-08-29)
+
+pure PD (--no-gravity) + damping 1.0 + lag-gain 25 ran all 150 steps:
+median err 0.0051, p95 0.0139, free-motion drift 0.1282 — the gate
+(0.04/0.08/0.15) PASSES.  The certified architecture: the FCI holds
+the bare arm; our loop is PD + speed-matched look-ahead.
+
+The remaining static ~0.05-0.07 rad is the uncompensated Robotiq+ZED
+payload (the FCI doesn't know it).  Added the payload path:
+- PandaModel.payload_gravity(q) (payload-only term).
+- ImpedanceLoop gravity_mode: full | payload | none.
+- control_loop --gravity-mode/--payload-com (--no-gravity = alias for
+  none); build_loop_argv passes both.
+- --calibrate-path under --no-gravity now FITS the payload mass/COM
+  from the pure-PD holds (spring torque = payload gravity) and prints
+  the replay command line; fit_payload = grid + coordinate polish.
+- BUILD_TAG rung-b-2026-08-29-payload.  Suite: 169 pass / 3 xfail.
+
+Next: calibrate-path (pure-PD) -> payload fit -> replay with
+--gravity-mode payload (no offsets) -> certify ep_000/ep_002.  Then
+the rollout roadmap: gripper wiring/driver, r2d2 driver integration,
+c3po policy client (JOINT_POSITION -> velocity), DROID camera
+conventions, end-to-end pi0.5 test.
