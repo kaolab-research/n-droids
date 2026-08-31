@@ -1362,3 +1362,28 @@ round(GAIN x recorded step size), capped at 8 — the look-ahead now
 scales with the speed like the lag does.  Sim: gain 100 -> drift
 0.067 (tau 0.28) / 0.118 (tau 0.40).  Next run: --damping-scale 1.0
 --lag-gain 100.
+
+## Follow-up: the circles explained — the FCI compensates gravity, our term double-compensates (2026-08-29)
+
+Both lag-gain runs aborted at the SAME steps 93-95 with drift
+0.20-0.22: the look-ahead only touches the fast sections, while a
+STATIC ~0.11-0.13 rad error persists through the slow deep section —
+the bias changed between runs (q6 by 1.12 Nm = 0.11 rad on Kq6=10),
+invalidating the offsets measured with the previous bias.  The two
+corrections fight; every bias re-calibration re-breaks the offsets.
+
+The deeper evidence (the calibration settle measurements) proves the
+Franka FCI already holds the arm against gravity: at every settle the
+arm rested perfectly still while our commanded torque was ~0 — an
+unsupported arm would collapse.  Our model-gravity term therefore
+DOUBLE-compensates and creates the pose-dependent sag
+(q* = q_d + K^-1(g+bias)) that the bias + offsets were fighting.
+
+Added --no-gravity (loop + smoke): pure PD, no model gravity, no
+bias.  Decisive hardware test: the hold gate WITHOUT gravity — if the
+arm holds the reset pose with ~no sag, the FCI compensates everything
+and the gravity term/bias/offsets are all removed permanently.  If it
+sags by the payload load, the FCI covers the bare arm only and the
+remaining step is a fitted payload gravity term (the 27-hold
+measurements now have a clean interpretation).  BUILD_TAG
+rung-b-2026-08-29-purepd.
