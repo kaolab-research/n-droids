@@ -1245,3 +1245,39 @@ if they keep growing (e.g., > 10 Nm at the deep holds), switch from
 per-path offsets to model-parameter identification (payload mass/COM
 fit from the hold data) — the principled fix for a model whose gravity
 error grows through the workspace.
+
+## Follow-up: gripper crash + the settle anomaly — payload, corner cuts, tick-rate clamp (2026-08-29)
+
+The cell is a DROID replica: Franka + Robotiq 2F-85 + ZED-M on the
+wrist.  The crash: the slew from hold 74 to hold 112 was a straight
+JOINT-SPACE line that cut a corner below the table (both endpoints
+high, the direct path dipped to flange z 0.097 — the recorded path
+between those steps never dips below 0.158).  The z-floor fired 3 mm
+late because the GRIPPER hangs below the flange.
+
+The settle anomaly: at holds 37/74 the arm rested ~0.33 rad from the
+written target with the commanded spring ~0 — the loop's effective
+target was not chasing.  Prime suspect: the chase clamp was per-TICK
+(pace/CONTROL_HZ), silently assuming the Python loop ticks at 1 kHz.
+
+Fixes:
+1. Time-based chase clamp (pace x dt_elapsed, one clock read per
+   iteration) + a 10 s diagnostic print (tick rate + chase lag) — the
+   next run shows the loop's true tick rate.
+2. Calibration slews now FOLLOW THE RECORDED PATH between holds
+   (guided slew, 15 Hz) — straight joint-space corner cuts are gone.
+3. Default holds = free-motion steps inside the longest contiguous
+   recorded segment above z 0.30 (the deep contact region is the
+   recorded gripper PRESSING the table — not a gravity measurement,
+   and the crash mode); --hold-step overrides, one run per segment.
+4. Settle diagnostics: settle q, measured tau_J, ee z, and the target
+   read-back — the tau_J settles the mechanism debate.
+5. Adaptive replay z-margin: min(0.08, max(0.03, 0.25 x z_rec)) — the
+   gripper hangs below the flange, so the allowance shrinks low over
+   the table (the crash: 0.097 vs recorded 0.158).
+
+BUILD_TAG rung-b-2026-08-29-cal4.  Next hardware: two high-region
+calibration sessions (--hold-step 0 9 18 26; then the default),
+paste the logs with tau_J; then fit the payload (Robotiq + ZED mass
+and COM) from the clean high-pose measurements before touching the
+deep region again.
