@@ -1204,3 +1204,21 @@ verify the tag, then calibrate-path -> replay with the calibration.
 Also report what the arm touched at t~46 (flange [0.51, 0.15, 0.086] m
 base frame) and, if possible, measure the table height relative to the
 robot base.
+
+## Follow-up: calibration first-hold veto — margin guard vs the measurement (2026-08-29)
+
+The calibrate-path run aborted at its own first hold: the arm settled
+0.14 rad / 10 cm low at the start pose (FCI ee z 0.423 vs recorded
+0.527) — the same static sag as the crash — and the replay-fidelity
+z margin (0.08) vetoed the very measurement the hold exists to take.
+Decisive bonus: the REAL FCI ee z (0.423) matches the model FK of the
+arm's own joints (~0.426), so the kinematics are right and the sag is
+a joint-space workspace residual, exactly what the calibration
+measures.
+
+Fix: calibration holds use the SAFETY envelope only (z floor + joint
+drift + stall detector), not the recorded-path margin.  The z floor
+now also guards the slew itself (slew_to/reset_arm z_floor param), so
+a deep uncorrected hold aborts mid-motion instead of reaching the
+table; the replay keeps the full margin check.  BUILD_TAG
+rung-b-2026-08-29-calfloor.
