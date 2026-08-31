@@ -1310,3 +1310,28 @@ adaptive z-margin and floor guarding.  Stand at the e-stop for the
 deep section: the recorded contact poses press the gripper onto the
 table BY DESIGN (the recorded robot did the same at the same
 geometry).
+
+## Follow-up: replay watchdog abort — dynamic tracking lag on the fast descent (2026-08-29)
+
+Two replays aborted at step 23 (joint drift 0.201/0.206 vs 0.20):
+the arm lags the recorded chain ~4-8 steps (z 0.445 vs rec 0.380 at
+step 20) on ep_001's opening descent — a ~0.5 s tracking time
+constant, not a per-step gain deficit.  The start offset is now small
+(0.044); the residual drift is pure dynamics.
+
+The x2.5 damping was the OLD throttle-era calibration (reproduce the
+recorded plant's slowness); with absolute replay the recorded chain
+already embodies the recorded lag, so extra damping only adds ours.
+
+Fixes:
+- --lookahead N: predictive feedforward — the replay writes the
+  target for step t+N (it knows the future trajectory); the watchdog
+  compares against the TARGET pose, the tier-(b) summary against the
+  recorded step.  Saturated at the episode end.
+- --damping-scale: exposed (default 2.5 kept; the spec's nominal is
+  1.0).  Lag-model sim (first-order tau, equilibrium sag = -off):
+  tau 0.50 + k=7 -> drift 0.127; tau 0.20 + k=2 -> drift 0.050;
+  tau 0.33 + k=4 -> drift 0.079.  Recommend damping 1.0 + lookahead 2
+  first; fallback damping 2.5 + lookahead 7 if it rings.
+
+BUILD_TAG rung-b-2026-08-29-lookahead.
