@@ -1335,3 +1335,18 @@ Fixes:
   first; fallback damping 2.5 + lookahead 7 if it rings.
 
 BUILD_TAG rung-b-2026-08-29-lookahead.
+
+## Follow-up: lookahead tuning — measured lag tau=0.28 s (2026-08-29)
+
+Damping 1.0 + lookahead 2 carried the replay through the whole deep
+section (z tracking within 1 cm: 0.159 vs 0.159 at step 80) and died
+at step 95 (drift exactly 0.200) on the fast RISE, whose recorded
+deltas (0.044 rad/step) are ~1.5x the opening's.  Lookahead 7 with
+damping 2.5 (tau ~0.5 s) over-compensated the opening transient and
+aborted at step 17.
+
+CSV-vs-fixture lag measurement: tau = 0.28 s at damping 1.0 (lag
+0.165 rad at v 0.6 rad/s on the rise; consistent with the opening at
+k=2).  Lag-model sim: k=4 -> drift 0.063; k=3 -> 0.073; k=2 -> 0.095.
+Next run: --damping-scale 1.0 --lookahead 4 (flags already in the
+image — no rebuild).
