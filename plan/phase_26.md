@@ -1411,3 +1411,23 @@ Next: calibrate-path (pure-PD) -> payload fit -> replay with
 the rollout roadmap: gripper wiring/driver, r2d2 driver integration,
 c3po policy client (JOINT_POSITION -> velocity), DROID camera
 conventions, end-to-end pi0.5 test.
+
+## Follow-up: ep_000/001 pass; ep_002 opening ramp; payload fit needs extended poses (2026-08-29)
+
+ep_000 (median 0.0041, drift 0.1271) and ep_001 (median 0.0043, drift
+0.1316) PASS tier-(b) under pure PD + gain 25.  ep_002 aborted at step
+11: its opening is a hard ramp (dq 0 -> 0.073 rad/step, the fastest of
+all fixtures); the arm's lag there is 0.245 s (grows with speed via
+damping) vs the 0.11 s the gain-25 look-ahead assumes.  Fix: --lag-gain
+45 (k=3 at the ramp; the small over-lead on the slower episodes is
+harmless).
+
+The payload fit from the episode holds returned mass 0: at the high-z
+holds the payload only produces 1-3 Nm — under the friction noise.
+Added --calibrate-payload: holds 4 EXTENDED poses (raised + straight,
+wrist-rolled, elbow variants) where the payload lever is maximal
+(6-10 Nm of signal) and fits mass + COM from the sag.
+
+Robotiq 2F-85 is wired to the NUC via USB — the gripper dimension
+(driver + 8th action/observation) lands in the driver-integration
+milestone.  BUILD_TAG rung-b-2026-08-29-payload2.
