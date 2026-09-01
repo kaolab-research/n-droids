@@ -1544,3 +1544,25 @@ approached exactly as DROID's own arm did).
 BUILD_TAG rung-b-2026-09-02-gain025.  Next: rebuild, relaunch (arm
 must hold at launch, no joint-limit lines), fake policy should be a
 gentle 15 Hz drift at ~0.25x pace, then the pi05_droid rollout.
+
+## Follow-up: e-stop snap-back fixed (hold on every control entry); live-speed measurement mode (2026-09-02)
+
+The e-stop test snapped the arm back to the pre-stop pose: the hold
+only guarded the pristine zeroed channel, but after a rollout the
+channel carries the LAST written target — on re-entry the loop chased
+it.  The loop now holds the live pose on EVERY control entry (startup
+or recovery) until the first new write lands — a stale pre-recovery
+target is never right to chase.  Loop tests restructured to the
+delayed-write pattern (writes land after entry); the clamp gets its
+own pure-function test.
+
+For the pi0.5 speed question, added --measure-live-gain: a
+deterministic 15 Hz velocity sweep through the LIVE chain (with the
+--action-gain scaling) prints the realized motion per unit commanded
+velocity vs the recorded plant's distribution (median realized/
+commanded 0.2134 -> 0.0427 rad/step per unit |v|, from the fixture
+measurements) and the exact recommended impedance_action_gain.  This
+separates the speed axis from the policy-quality axis.
+
+BUILD_TAG rung-b-2026-09-02-measure.  Next: run --measure-live-gain,
+set impedance_action_gain to the printed value, re-rollout.
