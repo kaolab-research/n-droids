@@ -1442,3 +1442,20 @@ hard limit (joint_reflex, joint-limit recovery, velocity violation,
 calibration slews slow to 0.03 rad/step (gentler on the 2+ rad
 swings).  Pose FK verified: flange z 0.80-0.82 m, x ~0.6 m — ~70 cm
 clear of the table.  BUILD_TAG rung-b-2026-08-29-payload3.
+
+## Follow-up: payload mass 0 is CORRECT; watchdog reference fix (2026-08-29)
+
+The extended-pose holds measure only ~2 Nm of payload gravity (an
+uncompensated 1.4 kg at 0.63 m would be ~8 Nm on the shoulder) — the
+FCI compensates the gripper+camera itself (the Desk end-effector load
+setting feeds the FCI model).  mass 0 is the honest fit: no payload
+term needed, pure PD stands.  (Check Desk -> End-Effector for the
+configured mass/COM, for the record.)
+
+ep_002's abort was the watchdog comparing the arm against the
+LOOK-AHEAD target, tripping on the look-ahead itself (the arm was only
+0.09 rad behind the RECORDED pose at the abort).  Fixed: joint drift
+checks vs the recorded step (fidelity), flange z vs the target step
+(safety).  BUILD_TAG rung-b-2026-08-29-payload4.  ep_002 re-run with
+--lag-gain 100 (the ramp is a transient; a bigger look-ahead pre-tracks
+the onset).
