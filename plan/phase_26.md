@@ -1485,3 +1485,38 @@ the user's order:
 
 Open hardware items: first USB activation of the Robotiq on the NUC;
 first live policy actions through the impedance driver path.
+
+## Follow-up: station-launch flare — the loop chased the zeroed startup channel (2026-09-01)
+
+droid.sh launched the NEW impedance runtime correctly (transport up,
+Robotiq activated, ZEDs streaming) — but the arm flared UPRIGHT: the
+shim memsets the target channel to zeros at startup, and the loop
+chased those zeros at 1.5 rad/s straight into the joint limits
+("[droid-shim] joint-limit recovery ok" x2, then Reflex), where it sat
+in manual recovery: the reset blocked and every policy action died —
+the fake-policy run's "no motion" was the reflex state, not the
+pipeline.  (The pre-existing stale-zero guard only initialized the
+EFFECTIVE target from the live state; it never stopped the CHASE of a
+zeroed WRITTEN channel.)
+
+Fixes:
+- The loop now HOLDS the live pose on in-control entry when the target
+  channel is the pristine zeroed segment (seq == 0) and resumes chasing
+  on the first real write (read_target_with_seq tracks the counter).
+- ImpedanceExecutor.start() seeds the target channel with the live
+  pose (belt-and-braces).
+- The policy client now paces its step loop at the station's control
+  rate (the fake-policy run free-ran at ~1.2 kHz, racing the 15 Hz
+  server).
+- r2d2's config loader now REFUSES unknown robot-block keys (the
+  silent filter ran the old franky driver against the new yaml on a
+  stale image — exactly the 2026-09-01 morning's no-motion session).
+
+BUILD_TAG rung-b-2026-09-01-holdzero.  Rebuild, relaunch droid.sh: the
+arm must hold where it is (no flare); fake-policy should show a gentle
+15 Hz +/-0.1 rad oscillation; then the real pi05_droid rollout.
+
+franky question: KEEP the franky backend for now — it is the only
+control-box fallback and the impedance LIVE path is exactly what this
+week is certifying; remove it as a cleanup milestone after the live
+rollout passes (the impedance path already never touches franky).
