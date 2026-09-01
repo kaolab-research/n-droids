@@ -1520,3 +1520,27 @@ franky question: KEEP the franky backend for now — it is the only
 control-box fallback and the impedance LIVE path is exactly what this
 week is certifying; remove it as a cleanup milestone after the live
 rollout passes (the impedance path already never touches franky).
+
+## Follow-up: the flare persisted — the seed wrote the ZEROED state; live pace = recorded gain (2026-09-02)
+
+Second flare at launch, same reflexes: the hold-zero fix guarded a
+pristine seq==0 channel, but ImpedanceExecutor.start() seeded the
+target with the FIRST state it read — the pristine ZEROED segment (a
+zeroed seqlock channel reads as valid), making the channel look
+freshly written.  The loop then chased those zeros into the joint
+limits again.  Fix: start() seeds ONLY from a live is_in_control state
+(the loop then holds or chases the live pose — no flare either way).
+
+The fake policy then MOVED but was violent: the live path realizes
+commands at full speed (v=0.49 -> 0.098 rad/step ~ 1.5 rad/s), while
+the recorded DROID plant realized 0.21-0.28 of each commanded step.
+Added impedance_action_gain (default 0.25, the measured recorded-plant
+gain) applied to the velocity stream in the driver's impedance branch;
+station.droid.yaml sets it.  pi0.5's "arm curls in on itself" was the
+same full-speed realization of far JOINT_POSITION targets — the gain
+restores the recorded pace (the checkpoint's actions are then
+approached exactly as DROID's own arm did).
+
+BUILD_TAG rung-b-2026-09-02-gain025.  Next: rebuild, relaunch (arm
+must hold at launch, no joint-limit lines), fake policy should be a
+gentle 15 Hz drift at ~0.25x pace, then the pi05_droid rollout.
