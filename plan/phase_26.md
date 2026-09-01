@@ -1431,3 +1431,14 @@ wrist-rolled, elbow variants) where the payload lever is maximal
 Robotiq 2F-85 is wired to the NUC via USB — the gripper dimension
 (driver + 8th action/observation) lands in the driver-integration
 milestone.  BUILD_TAG rung-b-2026-08-29-payload2.
+
+## Follow-up: calibrate-payload joint-limit reflexes — illegal elbow-roll poses (2026-08-29)
+
+The payload poses requested elbow-roll (joint 4, index 3) = 0.0 — but
+its range is (-3.07, -0.0698), ALWAYS negative; the arm drove into the
+hard limit (joint_reflex, joint-limit recovery, velocity violation,
+~131-256 Hz loop under the recovery churn).  Fixed: all poses use
+-0.90 there, the wrist roll reduced 1.3 -> 0.8 rad, and the
+calibration slews slow to 0.03 rad/step (gentler on the 2+ rad
+swings).  Pose FK verified: flange z 0.80-0.82 m, x ~0.6 m — ~70 cm
+clear of the table.  BUILD_TAG rung-b-2026-08-29-payload3.
