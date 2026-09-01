@@ -1459,3 +1459,29 @@ checks vs the recorded step (fidelity), flange z vs the target step
 (safety).  BUILD_TAG rung-b-2026-08-29-payload4.  ep_002 re-run with
 --lag-gain 100 (the ramp is a transient; a bigger look-ahead pre-tracks
 the onset).
+
+## Milestone: packaging — M1/M2/M3 landed, test suite first (2026-08-29)
+
+The certified executor is packaged into the project, tests first per
+the user's order:
+
+- M1: certified defaults in FrankaRobotConfig (control_mode,
+  impedance damping 1.0 / pace 1.5 / gravity-mode none, payload,
+  z_floor 0.10); episode-geometry preflight refuses episodes whose
+  recorded flange envelope dips below the cell floor BEFORE motion
+  (ep_002's table lesson) — wired into --replay.
+- M2: FrankaRobot control_mode="impedance" — connect/disconnect own
+  the shim+loop lifecycle, DROID velocity actions write through the
+  executor (shared validation refactored out), observations from
+  executor state, reset = executor slew; the franky backend stays
+  behind the config.  station.droid.yaml switches to impedance.
+- M3: Robotiq wrapper pinned against a fake backend (bit encoding,
+  DROID width conventions, activation).
+- Tests: test_episode_geometry.py, test_driver_executor_mode.py
+  (fake-executor contract + certified argv), test_gripper.py.
+  Suites: plugin 190 pass / 3 xfail; core B1 27 pass.
+- roadmap_droid_rollout.md records M1-M6; M4 (policy client) and M5
+  (cameras) are next.
+
+Open hardware items: first USB activation of the Robotiq on the NUC;
+first live policy actions through the impedance driver path.
