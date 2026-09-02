@@ -1583,3 +1583,16 @@ gains an action_log telemetry knob: every impedance action appends
 (t, gained velocity, arm q) — the next pi0.5 rollout produces the
 realized-vs-commanded CSV that separates the SPEED axis from the
 POLICY/observation axis.  BUILD_TAG rung-b-2026-09-02-gainmeasure2.
+
+## Follow-up: the 1.00 reading — a sine is the wrong excitation; episode-based measurement added (2026-09-02)
+
+The sine sweep's realized/(v x 0.2) ratio collapses by GEOMETRY, not
+by the arm's tracking: for an oscillating command the target stays
++-(v x 0.2) from the anchor while its net per-step motion is only the
+sine's slope.  The honest measurement drives STEP-LIKE commands
+(random velocities, like real policy actions) or — the ground truth —
+the RECORDED episode's own action stream: --measure-episode NPZ runs
+the recorded velocities through the live path and compares the
+realized motion against the recorded arm's own realized motion (the
+very distribution the 0.2134 reference came from), printing the scale
+and the exact recommended gain.  BUILD_TAG rung-b-2026-09-02-epgain.
