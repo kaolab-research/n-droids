@@ -1566,3 +1566,20 @@ separates the speed axis from the policy-quality axis.
 
 BUILD_TAG rung-b-2026-09-02-measure.  Next: run --measure-live-gain,
 set impedance_action_gain to the printed value, re-rollout.
+
+## Follow-up: the 0.39 recommendation was friction-dominated; measurement fixed (2026-09-02)
+
+The first --measure-live-gain sweep (amplitude 0.3, gained steps
+<= 0.015 rad) sat inside the joint friction band: the arm realized
+only 0.137 of the commanded deltas and the recommendation (0.39) was
+an over-read — the 0.39 rollout moved ~1.3-1.5x the dataset-faithful
+pace.  Fixes: the sweep amplitude is 0.8 (recorded-scale commands);
+the analysis splits the OVERALL median from the FRICTION-FREE median
+(|v_gained| x 0.2 > 0.03 rad) and recommends from the friction-free
+band with the corrected formula (gain = recorded_per_unit / free —
+free is per-GAINED velocity).  The station gain reverts to 0.25 (the
+dataset's own number) pending the corrected measurement.  The driver
+gains an action_log telemetry knob: every impedance action appends
+(t, gained velocity, arm q) — the next pi0.5 rollout produces the
+realized-vs-commanded CSV that separates the SPEED axis from the
+POLICY/observation axis.  BUILD_TAG rung-b-2026-09-02-gainmeasure2.
