@@ -1,3 +1,9 @@
+> **Status (2026-09-03): SHIPPED** — this spec is implemented and
+> hardware-certified in the r2d2 repo (branch `main`): the Rung-B
+> impedance executor (`plugins/lerobot_robot_franka`), the merged DROID
+> driver, measured live-gain calibration, and working π0.5 rollouts.
+> The franky backend described below was removed in the cleanup.
+
 # Phase 26: Audit fixes + third-party plugin architecture (2026-08-16)
 
 Post-audit work: fixed the audited bugs and replaced the

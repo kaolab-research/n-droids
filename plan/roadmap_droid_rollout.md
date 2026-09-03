@@ -1,3 +1,8 @@
+> **Status (2026-09-03): DONE** — the rollout works end-to-end (the
+> policy picks the block; the remaining fine-motion tuning notes below
+> are historical).  See the r2d2 README for the current operating
+> guide.
+
 # Roadmap: seamless π0.5-DROID rollout on the lab Panda
 
 Status: the Rung-B execution engine is HARDWARE-CERTIFIED (tier-(b)

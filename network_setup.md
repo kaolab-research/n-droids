@@ -162,5 +162,6 @@ nmcli con up "Wired connection 1"
 This guide covers only the network layer (IP configuration, Ethernet
 cabling).  For robot-specific setup instructions, see:
 
-- [Franka Panda Setup](./franka_setup.md) — PREEMPT_RT kernel, Franka Desk,
-  Docker container with franky, per-session startup sequence.
+- Franka Panda Setup — PREEMPT_RT kernel, Franka Desk, FCI mode, and
+  the r2d2 station container (see the prerequisites at the top of
+  `launch_scripts/droid.sh` in the r2d2 repo).

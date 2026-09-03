@@ -1,3 +1,8 @@
+> **Status (2026-09-03): COMPLETE** — shipped in the r2d2 repo (branch
+> `main`): certified replays, measured per-joint gain calibration, the
+> π0.5 rollout client (`toy-so101/policy_rollout.py`), and the
+> post-cleanup single-backend driver.
+
 # DROID Station Rebuild Plan (branch: `droid-rebuild`)
 
 Goal: one robot station that runs pretrained π0.5-DROID checkpoints
