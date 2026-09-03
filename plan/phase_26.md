@@ -685,3 +685,914 @@ pass through the gate like a real deployment.
 
 Suites: r2d2 core 154 ✓ (5 skipped), franka plugin 93 ✓, droid plugin
 9 ✓, toy-so101 rollout 11 ✓.
+
+## Frozen spec: DROID's actual control stack (verified from sources) (2026-08-26)
+
+Verified against droid-dataset/droid (both the 2024-03 dataset-adjacent
+commit ba46d4af and current main), facebookresearch/fairo (polymetis +
+vendored torchcontrol), and libfranka 0.9.2.  This is the behavioural
+fidelity target for the rebuilt DROID station.
+
+**Controller — HybridJointImpedanceControl.**  Polymetis's
+``start_cartesian_impedance()`` and ``start_joint_impedance()`` launch
+the SAME policy (robot_interface.py); DROID calls the former and feeds
+``update_desired_joint_positions()`` — consistent, not a mismatch.  The
+executed control law (torchcontrol policies/impedance.py +
+modules/feedback.py):
+
+    tau = (J^T Kx J + Kq)(q_d - q) + (J^T Kxd J + Kqd)(-dq) + Coriolis + gravity
+
+It is JOINT-space impedance; the Cartesian gains Kx enter only as the
+configuration-dependent stiffness augmentation J^T Kx J (significant:
+comparable magnitude to Kq at typical lever arms).
+
+**Constants.**  hz 1000; Kq [40,30,50,25,35,25,10]; Kqd [4,6,5,5,3,2,1];
+Kx [400,400,400,15,15,15]; Kxd [37,37,37,2,2,2]; torque LPF 100 Hz
+(libfranka control(TorqueControl, limit_rate=true, cutoff=100));
+torque clamps [86 x4, 11.5 x3] Nm; joint vel limits [2.075 x4, 2.51 x3]
+rad/s; workspace box +/-1.0 m (loose); collision thresholds 40 N/40 N;
+safety reflexes on Cartesian/joint pos/vel with margins 0.05/0.2/0.5;
+auto error recovery loop.
+
+**Gravity is host-side.**  franka_panda_client.cpp adds none; libfranka
+torque control is raw (robot.h 0.9.2, issue #98); the RobotModel
+(panda URDF + Desk end-effector payload) computes gravity + Coriolis in
+the policy.  This DISPROVES the torque-saga shim premise ("control-box
+gravity via its internal impedance controller"): FCI impedance mode
+never had box gravity — the saga's four host-gravity attempts failed,
+host gravity itself was never ruled out.
+
+**15 Hz interface.**  DROID's robot_env converted normalized velocities
+to position targets: joint_delta = v x 0.2 (max_joint_delta), |v| <= 1
+normalized first (robot_ik_solver.py), gripper [0,1] absolute.  Targets
+held by the 1 kHz loop (zero-order hold) until the next 15 Hz update —
+exactly the chain our server implements.
+
+**Test tiers with thresholds (the decision instruments).**
+- (a) Offline contract vs real TFRecords: for >=95% of steps,
+  ||position_action_to_velocity(q_tgt, q_obs) - v_rec||_inf <= 0.05.
+- (b) Hardware replay fidelity: median per-step
+  ||dq_real - dq_rec||_inf <= 0.04 rad; p95 <= 0.08; cumulative drift
+  <= 0.15 rad by step 150; reflex count 0.
+- (c) Observation pipeline: exact key match, images 224x224x3 uint8,
+  state shapes 7/1, all finite, sustained rate >= 14.5 Hz.
+
+Implementation plan: plan/droid_rebuild.md (branch ``droid-rebuild``);
+the Phase 1 test-first contract is plan/droid_rebuild_tests.md.
+
+## Follow-up: Phase 1 implemented (droid-rebuild) (2026-08-26)
+
+Test-first per plan/droid_rebuild_tests.md; hardware runs stay off until
+the suites below are green on real fixtures.
+
+- **Collapse:** `lerobot_robot_droid` deleted; one robot type ``franka``
+  (DROID protocol unconditional: `droid_compatible` default True,
+  gripper default robotiq, dynamics default 0.1); registry drops
+  ``"droid"``; `station.droid.yaml` (`type: franka`, explicit
+  velocity_filter_tau) + `droid.sh` are the single Franka config/launch;
+  the four franka config/launch variants deleted (rebot/so101 untouched);
+  Dockerfile drops the droid plugin; README/policy_rollout doc sweep.
+- **reset_arm.py wild-motion fix:** homing velocity now clips to
+  +-velocity_scale ITSELF (default 0.25 -> <=0.05 rad/step for ANY
+  error), not +-1 — the earlier formulation still saturated full-scale
+  steps from far poses (the A6 test caught the flaw before hardware).
+- **Suites:** r2d2 core 170 passed / 10 skipped (collapse invariants,
+  droid contract smoke renamed to test_droid_contract.py, B1 trajectory
+  contract skips without fixtures); franka plugin 101 passed / 1 skipped
+  (merged defaults, registry collapse, B2 reference-executor harness —
+  real driver chain vs the frozen 1 kHz hybrid-impedance reference
+  model, J^T Kx J via the Panda DH geometric Jacobian, median<=0.04 /
+  p95<=0.08); toy-so101 38 passed (reset profile + closed-loop sim,
+  replay/export, B3 observation shape pin).
+- **Fixtures:** tests/data/droid/README.md documents the bootstrap
+  (export_droid_trajectory.py from the lab TFRecords); Suite B skips
+  loudly until real episodes land there.
+
+## Follow-up: homing oscillation diagnosed from logs + box disabled (2026-08-26)
+
+Hardware homing run with per-step pose logging diagnosed the oscillation
+mechanism (not a code typo — loop physics):
+
+- **Deceleration ramp, not lag.**  On the first zero-crossing (step 6)
+  the command reversed (v=-0.129) but joint 3 kept moving positive for
+  ~5 steps with linearly decaying increments (+0.047, +0.038, +0.028,
+  +0.020, +0.009) — the velocity generator shedding +0.75 rad/s at the
+  stacked ramp rate (generator 0.5x accel + driver slew + 100 ms LPF ≈
+  2 rad/s^2 effective).  Overshoot ≈ 0.14 rad = dq^2/2a at a≈2.  The
+  pure-P law (gain 1 in the |err|<0.05 zone) reversed the command
+  faster than the executor can follow → limit cycle; multi-joint phase
+  offsets = the circular EE path; amplitude grew 0.13 → 0.31.
+- **Workspace box tripped too.**  EE z ≈ 0.60-0.64 m at the reset-pose
+  neighborhood = the DROID-standard box's upper z (0.60) → reject-and-
+  hold fired continuously, fighting the client loop.  Box DISABLED in
+  station.droid.yaml pending manual measurement of the real workspace
+  (the collapsed z-bound test pins the disabled state + rationale).
+- **Fix (client):** braking-limited profile v = min(err/0.2,
+  sqrt(2a|err|)/3, scale) + command slew (0.05 v/step) — the command
+  never demands more deceleration than the ~1.5 rad/s^2 (conservative,
+  log-calibrated) the executor can deliver.  Tests extended: the
+  realistic station model (LPF + ramp) now REPRODUCES the old law's
+  oscillation (regression guard) and the new law converges from sampled
+  poses with no overshoot beyond tolerance.  toy 40 tests green.
+- r2d2 core 170 passed / 10 skipped.
+
+## Follow-up: client-side homing retired — server-side reset (2026-08-26)
+
+The braking/slew fix tamed the homing oscillation but a bounded limit
+cycle persisted (err oscillated 0.03-0.05 rad for ~280 steps) and a
+``joint_motion_generator_acceleration_discontinuity`` reflex + violent
+arm shot ended the run (e-stop).  The command stream at that moment was
+nearly static, so the discontinuity came from INSIDE the velocity chain
+(inter-action dt hiccup scaling the slew budget, or the Ruckig re-seed)
+— and after reflex + automatic recovery the box resumes with stale
+references.
+
+**Structural verdict: client-side velocity-servo homing is retired.**
+Three hardware incidents (wall collision, growing oscillation, reflex
+shot) all trace to closing an autonomous position loop through the
+velocity executor's 15 Hz preemption chain.  First principles: the
+control box's position motion generator is the proven mode (its own
+gravity, one smooth Ruckig trajectory, zero preemption), and DROID
+itself reset with a blocking position move.
+
+- **r2d2:** ``FrankaRobot.reset_arm()`` — ONE blocking
+  ``JointMotion(DROID_RESET_JOINTS)`` (gripper opens first, workspace
+  check, ControlException → recovery + rejection).  The server's
+  ResetEpisode handler runs it in a worker thread BEFORE the episode
+  boundary and emits ``arm_reset_complete`` / ``arm_reset_failed``
+  statuses; the 15 Hz loop keeps streaming obs during the move.
+- **toy-so101:** ``reset_arm.py`` is now a thin wrapper (reset →
+  wait_for_status → one zero-velocity step for the settled snapshot →
+  verify).  The client servo loop (P → braking → slew) and its sim are
+  DELETED (analysis preserved here and in git history); replay_droid
+  reuses the same flow.
+- **Tests:** driver suite 105 (+4 reset_arm tests: blocking motion to
+  the reset pose, gripper open, pre-connect raise, failure recovery);
+  r2d2 core 171 (+1 wire-level test: ResetEpisode → reset_arm call +
+  arm_reset_complete status); toy 33 (thin-wrapper flow against a stub
+  robot: success, timeout, off-target refusal, getattr defaults).
+- **Still open (rollout path, not homing):** the velocity executor's
+  discontinuity reflex and dt-hiccup sensitivity remain the Phase 2/3
+  telemetry target — the reference harness and tier-(b) thresholds
+  already exercise that chain offline.
+
+## Follow-up: real-data verdict — Rung A falsified, Rung B required (2026-08-26)
+
+Three lab fixtures (ep_000/001/002 from the official r2d2_faceblur RLDS,
+loaded via tfds.builder_from_directory after fixing the exporter for the
+nested _VariantDataset steps encoding) produced the first ground-truth
+verdicts:
+
+- **Tier (a) PASSES (21 tests).**  The conversion chain is confirmed by
+  the data itself: pos[t] - qpos[t] = vel[t] x 0.2 - realized_lag[t]
+  (obs is captured during/after the step; the residual IS the arm's own
+  tracking error).  Per-joint regression pins the 0.2 rad/unit-velocity
+  constant and its sign; recorded velocities are normalized (<=1);
+  gripper/delta/finiteness bounds hold.
+- **The dataset contains DROID's own executor-fidelity band:** the
+  recorded arm deviated from its commanded deltas by median ~0.045,
+  p95 ~0.14 rad/step — the reference for tier (b).
+- **Rung A FALSIFIED.**  Replaying the recorded commands through the
+  real driver chain (harness, no hardware) shows the franky velocity
+  executor diverging from the RECORDED trajectory by 0.5-3.3 rad of
+  cumulative drift over 150 steps at EVERY dynamics factor (0.05-1.0).
+  The recorded plant is a soft 1 kHz impedance tracker (realizes only
+  ~25-50% of commanded deltas during teleop transients, settles in
+  ~5-15 steps, reverses slowly); a scalar dynamics knob can match
+  magnitude but never the phase-laggy response.  This also explains the
+  historical wild rollouts: the policy was trained against a sluggish
+  plant and our executor over-executes its commands.
+- **Encoded as gates:** test_reference_executor keeps the
+  model-consistency check (passes at full dynamics) and adds
+  `test_tracks_recorded_trajectory` — the tier-(b) dataset-fidelity
+  gate, xfail(strict=True) with the measured numbers; XPASS = Rung B
+  landed.  Phase 4 (Rung B: the faithful 1 kHz hybrid impedance loop on
+  pylibfranka) is now the ACTIVE plan; the harness + fixtures give a
+  hardware-free acceptance loop for it.  Until then, interim hardware
+  experiments should keep dynamics LOW (~0.1) since the policy expects
+  a sluggish plant.
+
+## Follow-up: Phase 4 (Rung B) started — control math + gravity validated on real data (2026-08-26)
+
+**pylibfranka dependency conflict CONFIRMED.**  PyPI pylibfranka (0.21.3)
+wheels bundle libfranka >= 0.13.3 (FCI server 7+); the legacy Panda
+(FCI 5, system 4.2.2) caps at libfranka 0.9.2 — no compatible release
+exists and a source backport means maintaining a fork of an obsolete
+API (the saga pivoted for exactly this reason, commit d2bed7b).  Rung B
+transport = libfranka 0.9.2 directly (the saga's proven C++ control-loop
+pattern); franky stays for nothing in the DROID path (one loop does
+DROID actions, reset moves, and safety — polymetis parity).
+
+**New module `lerobot_robot_franka/impedance_loop.py`** — the frozen
+controller math in pure Python: hybrid joint PD (JᵀKxJ + Kq gains),
+100 Hz torque LPF, torque clamps, and host-side gravity from the
+franka_ros URDF masses/COMs + payload (1.0 kg @ [0,0,0.056] flange).
+The offline tests found and fixed two real gravity bugs before any
+hardware: link-*i* COMs live in frame *i+1* (not *i*), and the
+geometric Jacobian must be truncated to the joints each COM depends on
+(proximal links were "pulling" 22 Nm on the wrist); plus the plant
+physics fix — the simulated body must FEEL the world's gravity pull for
+the controller's compensation to cancel it.
+
+**Real-data verdicts (the three fixtures):**
+- Gravity sanity: max |tau_g| 21.3 Nm (joint 3) / 11.7 Nm (joint 5 —
+  just over DROID's 11.5 clamp, which the recorded arm demonstrably
+  held, so the model is within a few percent; hardware calibration
+  settles it).  Exact-zero on the vertical axes at the reset pose.
+- Offline sag gate PASSES: the plant holds the reset pose with
+  host-side gravity (sag < 0.02 rad over 1 s).
+- **The dataset's plant gain, measured: the recorded arm realizes only
+  0.21-0.28 of each commanded delta at the MEDIAN (p90 0.37-0.44).**
+  The impedance loop with damping_scale 2.5 reproduces that
+  distribution, and ep_001/ep_002 replay within the tier-(b) thresholds
+  (drift 0.01-0.09 rad).  ep_000's reproduction is xfail: its long
+  press-against-the-pot segment makes contact transitions overlap the
+  free-motion distribution — unjudgeable for a free-space model (kept
+  for gravity tests).
+- Implication for hardware: the Rung B real-time loop must reproduce
+  this ~0.25 plant gain (the policy was trained against it); the
+  hardware gravity-acceptance test (hold at reset, sag < 0.02) remains
+  the first on-arm gate.
+
+## Follow-up: Rung B transport implemented test-first (2026-08-26)
+
+The 1 kHz transport follows the saga's proven pattern, with the math
+staying in the validated Python module (zero porting risk):
+
+- **shim_protocol.py** — the ctypes shm layout (Target/Torque/State,
+  seqlock per channel, hold-last on torn reads, writer always lands on
+  an even seq) + shim/loop argv builders.  Layout pins: Target 80 B,
+  Torque 64 B, State 600 B, total 760 B — kept in sync with the C++.
+- **control_loop.py** — the 1 kHz process: read state + target, compute
+  the frozen torque via ImpedanceLoop.compute_torque (fresh gains +
+  gravity every tick), write torque; zero-torque when the shim is down;
+  holds last on torn state.
+- **impedance_executor.py** — the driver-side endpoint: process
+  lifecycle (shim + loop), send_droid_action (q_d = clip(q + v x 0.2,
+  limits) — the exact recorded pipeline identity), blocking reset_arm
+  (target the reset pose, poll convergence), state reads.
+- **shim/droid_torque_shim.cpp** — transport-only C++ (libfranka 0.9.2):
+  publish state at 1 kHz inside the torque callback, read tau_des
+  (seqlock, hold-last), return it through control(TorqueControl,
+  limit_rate, cutoff); collision behavior, recovery loop, and a --mock
+  mode (synthetic plant) so the FULL transport runs on the NUC without
+  the arm.  Builds like the saga shim (Dockerfile shim-builder stage).
+- **Tests (31 new):** protocol layout/seqlock/torn-read round-trips;
+  loop-vs-reference torque equality, zero-torque safety, torn-state
+  survival; executor conversion identity vs ALL THREE fixtures
+  (q_d = velocity_to_target(qpos[t], vel[t]) recovers the recorded
+  target chain, contact steps excluded), limit clipping, reset flow
+  against a stub plant, argv plumbing.
+
+NUC checklist (no arm needed for most): build the image; run
+`droid_torque_shim --mock --shm-name test` + `python -m
+lerobot_robot_franka.control_loop --shm-name test` + the executor smoke
+(connect, read state, send actions, reset) — the mock plant converges.
+THEN, with the arm (e-stop discipline):
+1. gravity acceptance: launch shim (real), loop, write target = reset
+   pose, watch state: arm must settle at reset with sag < 0.02 rad and
+   no drift for 30 s (kill switch = stop_request);
+2. tracked move: target reset -> +0.1 rad on joint 1 and back — smooth,
+   no reflex, no oscillation (the calibrated damped loop);
+3. full reset_arm via the executor;
+4. replay_droid on ep_001 (free-motion-dominated) — tier-(b) thresholds.
+
+## Follow-up: Gate 1 hardware run — stable hold, shutdown-jerk bug fixed (2026-08-27)
+
+First real-arm Gate 1 (`--hold-reset 30`):
+
+- **Hold: stable, no drift, sat 0.081 rad short.**  Decomposed exactly
+  like a PD-without-integral plant: joint 6 0.081 rad x Kq6(10) = 0.8 Nm
+  (wrist static friction), joints 2/4 ~0.05/0.025 x 30/25 = ~1.6/0.6 Nm
+  (model-vs-true gravity).  DROID's own plant had identical physics.
+  Gate recalibrated to its actual purpose — catching CATASTROPHIC
+  gravity failure (the saga's 1.5 rad collapse): PASS threshold 0.15 rad
+  with the numbers logged; the tier-(b) replay remains the real
+  fidelity gate.
+- **Shutdown jerk = a bug in executor.stop(): it wrote q_des = zeros
+  (an impossible pose) alongside stop_request** — the loop slammed full
+  PD torque toward q=0 → power_limit_violation reflex.  Fixed: stop()
+  only sets stop_request; the loop exits on the request; the shim ends
+  control() from INSIDE its callback on the same flag (no recovery
+  attempts on stop) — shutdown is now target-free and in-control.
+  Tests pin: request_stop leaves q_des untouched, the loop exits on the
+  request, and executor.stop never writes a target.
+
+## Follow-up: Gate 2 "failure" diagnosed — reset tolerance vs plant physics (2026-08-27)
+
+The move-joint1 run's real story (the capture hid it — reset_arm
+printed nothing during its 20 s poll, so stderr/stdout lines from ~2 s
+and ~20 s appeared adjacent): the shim never died early.  The arm
+tracked toward the reset pose, settled at its measured static band
+(~0.08-0.13 rad — the Gate 1 physics: wrist friction + pitch model
+mismatch, PD without integral), and reset_arm's 0.02 rad tolerance was
+UNREACHABLE -> 20 s timeout -> shutdown.  The "fatal: stop requested"
+line was the clean-stop path mislabeled (libfranka 0.9.2 propagates the
+callback exception unwrapped).
+
+Fixes: reset_arm tolerance defaults to 0.15 (the measured static band;
+DROID's own reset was a time-based min-jerk move, never a sub-friction
+error demand), progress prints every 1 s, fast-fail after 3 s of
+shim-not-in-control; the shim labels the stop path "(clean)" and logs
+any stale stop_request it zeroes at startup.  The ±0.1 rad tracked
+moves then run against a tolerance the plant can actually meet.
+
+## Follow-up: replay + post-e-stop reset incidents — two structural fixes (2026-08-27)
+
+Replay (first 15 Hz target staircase on hardware) misbehaved and the
+post-e-stop reset slammed into a cartesian_reflex.  Root causes:
+
+1. **Double torque filtering.**  The Python loop applied a 100 Hz LPF
+   AND libfranka applied another (control(..., cutoff=100)) — DROID's
+   stack filtered exactly once (libfranka-side; the policy emitted raw
+   PD+gravity).  The extra lag pushed the closed loop beyond its
+   calibration on target staircases.  Fix: compute_torque(filter=False)
+   in the real-time loop — one filter total, as specified.
+2. **Far target jumps.**  reset_arm wrote the reset pose as a single
+   step; after the e-stop the arm was ~1.5 rad away, so the PD slammed
+   with clamped torques -> cartesian_reflex.  Fix: reset SLEWS the
+   target at the validated 0.05 rad/15 Hz-step pace (a trajectory like
+   DROID's min-jerk reset, never a jump); pinned by a test (first write
+   <= 0.05 rad from the current state).
+3. **Retry spam in manual-recovery states.**  The shim now detects
+   e-stop/reflex errors, logs MANUAL RECOVERY REQUIRED once per state
+   change, and polls at 500 ms instead of flooding AER attempts that
+   the box rejects anyway.
+
+Suites: plugin 142 passed / 4 xfailed; core 192/5.
+
+## Follow-up: stale-zero target slam — the real cartesian_reflex cause (2026-08-27)
+
+The slewed reset STILL reflexed because the slew was initialized from
+the PRE-CONNECT segment state (zeros): the target chain started at
+q=0, far from the arm, and the PD slammed the moment control began
+(run 1 was the arm still in Reflex from the previous session — the
+shim correctly waited; run 2 reflexed on the stale-zero target).
+
+Defense in depth, with the loop as the real-time safety layer:
+
+- control_loop clamps the EFFECTIVE target step to 0.0008 rad/tick
+  (~0.8 rad/s) and initializes it from the first LIVE state — no
+  writer (executor, future r2d2 driver) can ever jump the target;
+- reset_arm waits up to 10 s for the arm to enter control before
+  slewing, initializing q_d from the live state;
+- runbook rule: after any reflex/e-stop, clear the arm state with the
+  enabling device BEFORE re-running (the shim prints MANUAL RECOVERY
+  REQUIRED and waits).
+
+Tests: same-tick clamp semantics vs the reference torque, far-jump
+clamp (5 rad written -> 2 x 0.0008 effective), live-state gating of
+the first reset target.  Plugin 144 passed / 4 xfailed.
+
+## Follow-up: reflex reruns = stale image, not stale analysis (2026-08-27)
+
+The user's logs exonerated their procedure (e-stop released, Desk
+locked/unlocked, FCI cycled) AND exposed the real issue: the line
+`[reset] max err 2.5133` (|zeros - reset|) printed BEFORE `FCI
+connected` is impossible in the fixed code (reset now waits for the
+live state) — the container was running the PREVIOUS build, whose
+zeros-initialized target chain re-triggered the cartesian/power reflex
+on every fresh run regardless of how the reflex was cleared.
+
+Fix: BUILD_TAG ("rung-b-2026-08-27-clamp") printed by executor_smoke
+and checkable in-container without the arm; deployment procedure now
+includes the tag check before any hardware run.
+
+## Follow-up: verified build — the arm was already in Reflex (2026-08-27)
+
+With the build tag verified, the log showed control() rejected with NO
+motion-aborted line and no jerk: the arm was in Reflex mode BEFORE the
+shim connected.  Desk lock/unlock/FCI cycles do not clear a reflex on
+this box — it needs the error acknowledgment (activation device
+press+release, or Desk's error banner/unlock).  The shim now runs a
+preflight: prints robot_mode, explains recovery when Reflex/UserStopped,
+and waits (500 ms polls) until the mode clears, then starts control
+automatically; reset_arm waits up to 2 min with hints.
+
+## Follow-up: curl root cause measured — target pace now enforced (2026-08-27)
+
+Step response (3 runs): the real arm realizes 0.91-0.93 of a sustained
+step — a fast, faithful tracker (tau ~0.35 s).  The recorded DROID arm
+realized ~25% per 15 Hz step (0.02-0.04 rad/step).  The replay's curl
+(drift 0.53 -> 2.16 rad by step 100) = our arm traveling the recorded
+path at the loop's clamp pace (0.8 rad/s) — ~2.5x the recorded plant's
+realized pace — while the replay's apparent 0.25 'ratio' measured the
+clamp, not the arm.  Fix: the loop paces the effective target at
+0.5 rad/s (0.033 rad/step) = the dataset's realized pace, configurable
+(--target-pace / impedance_target_pace); diagnostics print realized vs
+recorded rad/step per 20 steps.  The tier-(b) replay gate now judges
+whether the paced chain reproduces the recording.
+
+## Follow-up: the real curl root cause — broken kinematics, now fixed (2026-08-28)
+
+The curl survived pacing because the GRAVITY MODEL's kinematics were
+wrong: a hand-derived DH table put the elbow 0.316 m off at q=0
+(horizontal instead of vertical) and links 3-7 COMs were garbled.  The
+model's gravity was wrong by tens of Nm at non-reset configs while
+canceling approximately at the reset pose — which is why the hold
+passed, why the sim was blind (it shared the frames), and why the arm
+drifted ~0.3 rad/s during replays (a ~3 Nm systematic bias).
+
+Fix: PandaModel rebuilt from mujoco_menagerie's canonical panda
+(static body poses/quaternions, correct COMs, flange -45 deg offset)
+plus the hinge-axis reference fix (mujoco joints pass through the
+CHILD frame origin).  Validation: horizontal hand-check 51.93 vs 51.94
+Nm; analytic gravity == finite-difference potential energy at
+vertical/horizontal/reset/random configs (permanent regression
+guards); the impedance-loop reproduction gate PASSES on all three
+fixtures, contact episode included; the reference harness uses the
+fixed model.  BUILD_TAG rung-b-2026-08-27-kinematics.  Hardware
+re-check: hold gate (the reset-pose compensation changed — the correct
+loads are ~10/-24 Nm on the pitch joints), then the replay gate.
+
+## Follow-up: residual bias calibration + joint-limit recovery (2026-08-28)
+
+Hold with the corrected model: settled 0.172 rad (joint 4 = -4.3 Nm of
+residual compensation error via Kq4 x 0.173; joints 2/6/7 ~1 Nm) —
+payload/COM approximation + friction.  The same bias drifted the replay
+toward the base -> joint_position_limits_violation reflex (e-stop
+cycles cannot clear that class: the box must drive the arm back inside
+the limits).  Fixes: per-joint gravity bias (--gravity-bias /
+impedance_gravity_bias) + --calibrate-hold gate that measures and
+prints the exact bias vector; the shim attempts AER for joint-limit
+reflexes.  Next hardware steps: calibrate-hold -> set the bias ->
+hold gate -> replay gate.
+
+## Follow-up: replay started from the wrong pose — ep_001 is not reset-anchored (2026-08-28)
+
+The streamed CSV settled it: recorded qpos[0] = [0.086, -0.300, 0.307,
+-2.122, -0.143, 1.762, 0.205] — 0.54 rad from the reset pose — so the
+replay's persistent 0.5-0.7 |q-q_rec| offset was the un-verified start
+pose (the re-anchored chain preserves any start offset forever), not a
+control error.  Fixes: the replay slews to the recorded qpos[0] first
+(slew_to parameterized from reset_arm); the default target pace drops
+to 0.3 rad/s (0.5 over-realized the episode's ~0.017 rad/step realized
+pace by ~1.5x).  BUILD_TAG rung-b-2026-08-28-startpose.
+
+## Follow-up: replay still wrong — root cause found and fixed (2026-08-29)
+
+The start-pose CSV (live steps 1-102) settled both failures:
+
+1. Replay drift: the executor re-anchored each target to the LIVE state
+   (q_d = q_state + v x 0.2).  Any unmodeled residual (the calibrated
+   bias is only exact at the reset pose) became a permanent per-step
+   drift: sag -> anchor to the sagged position -> sag again.  q5 fell
+   0.9 rad while commanded UP; q3/q4 rose against their commands;
+   |q-q_rec| grew ~0.013 rad/step -> 1.47 by step 100.  The 0.02
+   rad/step pace clamp also flattened the speed profile, so contact
+   steps (recorded arm pressing, realized ~0) were plowed through at
+   full pace.
+   Fix: ABSOLUTE replay — write the recorded position chain verbatim
+   (send_absolute_target).  The recorded deltas are then reproduced by
+   construction; bias residuals become bounded static offsets
+   (residual/Kq ~ 0.02-0.06), not drift.  The loop's step cap rises
+   0.3 -> 1.5 rad/s (0.1 rad/step): the recorded fastest step is
+   0.073 rad, and the cap's job is bounded tracking error (a far jump
+   stays a bounded slew), not throttling.  Also fixed: run_loop
+   ignored its target_pace argument.  Sim gate (B1, real clamp code +
+   first-order plant with bias residuals): absolute replay passes
+   tier-(b) with ~10x margin on all three fixtures; the pre-fix
+   re-anchored chain fails drift by ~2-4 rad — the discriminator is
+   pinned as a regression test.
+
+2. Reset stall at 0.159 rad: the model's gravity is exonerated (q1
+   gravity == 0 everywhere, as physics demands for a vertical axis) —
+   the loop demanded ~5.9 Nm on q1 (spring 4.4 + bias 1.5) and the arm
+   didn't move: mechanical contact at q1 ~ -0.154 (flange
+   [0.43, 0.18, 0.43] m).  The old reset then 'converged' by creeping
+   0.003 rad under the 0.15 tolerance — pressing at ~6 Nm for 10 s.
+   Fix: stall detector — a stationary arm above tolerance for 4 s
+   aborts loudly (obstruction or bad bias; never creep-to-converge).
+
+BUILD_TAG rung-b-2026-08-29-absreplay.  Next hardware step: rebuild,
+verify the tag, and BEFORE replaying check what the arm was pressing
+against at q1 ~ -0.154 (table edge / object / cable) — the recorded
+start pose must be physically reachable or the episode can't be
+replayed faithfully.
+
+## Follow-up: table crash — pose-dependent residual + envelope watchdog (2026-08-29)
+
+The second replay drove the flange into the table (cartesian_reflex at
+step ~47, flange z=0.086 m).  CSV analysis: x/y tracked the recorded
+path within 1-2 cm while z sagged ~10 cm FROM THE START — the slew
+accepted a mid-swing 0.148 rad static sag (q3/q6, both lower the
+flange), and the replay descended from there.  The implied residual is
+pose-dependent (~4-8 Nm growing through the descent); a constant bias
+cannot cover it.  Commanded torques stayed moderate (<= 18 Nm) — no
+runaway command; this is compensation error, not control instability.
+
+Fixes:
+1. Settle-aware convergence: reset/slew now require a STATIONARY arm
+   (0.6 s, <= 0.01 rad) inside tolerance before declaring convergence —
+   the mid-swing acceptance is gone.
+2. Path calibration: --calibrate-path holds poses along the recorded
+   trajectory (default 5, including the start) and iterates
+   off -= (settled - qpos) to a fixed point per hold (measuring at the
+   settled pose biases the offset by ~(dres/dq)/Kq; the iteration
+   removes it).  --replay --path-calibration FILE adds the interpolated
+   offsets to the written targets (the loop is untouched).  Sim gate:
+   0.41 rad uncorrected drift -> 0.018 rad calibrated.
+3. Envelope watchdog in --replay: aborts when flange z < recorded
+   z - 0.08 m (or below --z-floor, default 0.10) or joint drift
+   > 0.20 rad — the crash run would have aborted ~15 steps before the
+   table.  The replay CSV now also logs ee_x/ee_y/ee_z (the REAL FCI
+   flange pose) so the next run discriminates model-FK error vs
+   gravity residual directly.
+
+BUILD_TAG rung-b-2026-08-29-envelope.  Next hardware steps: rebuild,
+verify the tag, then calibrate-path -> replay with the calibration.
+Also report what the arm touched at t~46 (flange [0.51, 0.15, 0.086] m
+base frame) and, if possible, measure the table height relative to the
+robot base.
+
+## Follow-up: calibration first-hold veto — margin guard vs the measurement (2026-08-29)
+
+The calibrate-path run aborted at its own first hold: the arm settled
+0.14 rad / 10 cm low at the start pose (FCI ee z 0.423 vs recorded
+0.527) — the same static sag as the crash — and the replay-fidelity
+z margin (0.08) vetoed the very measurement the hold exists to take.
+Decisive bonus: the REAL FCI ee z (0.423) matches the model FK of the
+arm's own joints (~0.426), so the kinematics are right and the sag is
+a joint-space workspace residual, exactly what the calibration
+measures.
+
+Fix: calibration holds use the SAFETY envelope only (z floor + joint
+drift + stall detector), not the recorded-path margin.  The z floor
+now also guards the slew itself (slew_to/reset_arm z_floor param), so
+a deep uncorrected hold aborts mid-motion instead of reaching the
+table; the replay keeps the full margin check.  BUILD_TAG
+rung-b-2026-08-29-calfloor.
+
+## Follow-up: hold-37 stall abort — calibration tolerance vs the measurement (2026-08-29)
+
+calibrate-hold behaved (raw DROID-reset sag 0.15 rad; printed bias
+matches kq x err exactly).  calibrate-path progressed: hold 0 measured
+(~0.14 rad) and refined below 0.02; hold 37 (flange z 0.216) approached
+to 0.19 rad, then relaxed to its static attractor 0.30 rad from the
+target — the workspace residual at the deeper pose is ~7.5 Nm, ~2x the
+start pose's.  The stall detector (tolerance 0.20) vetoed the very
+measurement the hold exists to take.
+
+Fix: calibration slews now use tolerance 0.50 (and the post-settle
+drift bound 0.50) — static sag up to ~12.5 Nm on q3 is the
+measurement, not a stall; beyond that the arm is pressing and the
+stall detector still aborts.  The z floor still guards the descent
+mid-slew.  BUILD_TAG rung-b-2026-08-29-cal3.
+
+Next hardware step: same two commands.  Expect hold-37 to measure
+~0.3 rad and the refinement to land it.  Paste the per-hold residuals:
+if they keep growing (e.g., > 10 Nm at the deep holds), switch from
+per-path offsets to model-parameter identification (payload mass/COM
+fit from the hold data) — the principled fix for a model whose gravity
+error grows through the workspace.
+
+## Follow-up: gripper crash + the settle anomaly — payload, corner cuts, tick-rate clamp (2026-08-29)
+
+The cell is a DROID replica: Franka + Robotiq 2F-85 + ZED-M on the
+wrist.  The crash: the slew from hold 74 to hold 112 was a straight
+JOINT-SPACE line that cut a corner below the table (both endpoints
+high, the direct path dipped to flange z 0.097 — the recorded path
+between those steps never dips below 0.158).  The z-floor fired 3 mm
+late because the GRIPPER hangs below the flange.
+
+The settle anomaly: at holds 37/74 the arm rested ~0.33 rad from the
+written target with the commanded spring ~0 — the loop's effective
+target was not chasing.  Prime suspect: the chase clamp was per-TICK
+(pace/CONTROL_HZ), silently assuming the Python loop ticks at 1 kHz.
+
+Fixes:
+1. Time-based chase clamp (pace x dt_elapsed, one clock read per
+   iteration) + a 10 s diagnostic print (tick rate + chase lag) — the
+   next run shows the loop's true tick rate.
+2. Calibration slews now FOLLOW THE RECORDED PATH between holds
+   (guided slew, 15 Hz) — straight joint-space corner cuts are gone.
+3. Default holds = free-motion steps inside the longest contiguous
+   recorded segment above z 0.30 (the deep contact region is the
+   recorded gripper PRESSING the table — not a gravity measurement,
+   and the crash mode); --hold-step overrides, one run per segment.
+4. Settle diagnostics: settle q, measured tau_J, ee z, and the target
+   read-back — the tau_J settles the mechanism debate.
+5. Adaptive replay z-margin: min(0.08, max(0.03, 0.25 x z_rec)) — the
+   gripper hangs below the flange, so the allowance shrinks low over
+   the table (the crash: 0.097 vs recorded 0.158).
+
+BUILD_TAG rung-b-2026-08-29-cal4.  Next hardware: two high-region
+calibration sessions (--hold-step 0 9 18 26; then the default),
+paste the logs with tau_J; then fit the payload (Robotiq + ZED mass
+and COM) from the clean high-pose measurements before touching the
+deep region again.
+
+## Follow-up: the settle mystery is SOLVED — PD+gravity equilibrium, not a fault (2026-08-29)
+
+The diagnostics (loop tick 620-633 Hz, chase lag 0.0000, tau_J at the
+settles) settled it: at every settle K*(q_d - q) = -(g(q) + bias) to
+within ~1-2 Nm — the arm rests EXACTLY at the controller's static
+equilibrium, and tau_J reads the pure gravity load (correlation
+0.94-1.00 with the model, means within 0.3 Nm).  No brakes, no dead
+loop, no chase failure.
+
+The controller is a plain PD + gravity feedforward WITHOUT integral
+action, so its equilibrium is NOT the target:
+q* = q_d + K^-1 (g(q*) + bias) — the arm sags below the target by the
+gravity/stiffness ratio (0.12-0.35 rad at the holds).  That sag is
+what --calibrate-path measures and corrects: the fixed point converges
+to off = -K^-1 (g+bias), which is why every hold ended with the settle
+ON the recorded pose and the residual ~0.5 Nm.  The calibration files
+are valid; the gravity model itself is correct (the Robotiq+ZED
+payload appears only through the sag, absorbed by the offsets — a
+payload-parameter fit remains a later refinement for live rollouts,
+not a prerequisite for tier-(b)).
+
+Next: merge cal_a + cal_b into one file and run the replay with
+--path-calibration.  The offsets interpolate across the unmeasured
+deep region (t 27-101) — smooth, since g varies smoothly — with the
+adaptive z-margin and floor guarding.  Stand at the e-stop for the
+deep section: the recorded contact poses press the gripper onto the
+table BY DESIGN (the recorded robot did the same at the same
+geometry).
+
+## Follow-up: replay watchdog abort — dynamic tracking lag on the fast descent (2026-08-29)
+
+Two replays aborted at step 23 (joint drift 0.201/0.206 vs 0.20):
+the arm lags the recorded chain ~4-8 steps (z 0.445 vs rec 0.380 at
+step 20) on ep_001's opening descent — a ~0.5 s tracking time
+constant, not a per-step gain deficit.  The start offset is now small
+(0.044); the residual drift is pure dynamics.
+
+The x2.5 damping was the OLD throttle-era calibration (reproduce the
+recorded plant's slowness); with absolute replay the recorded chain
+already embodies the recorded lag, so extra damping only adds ours.
+
+Fixes:
+- --lookahead N: predictive feedforward — the replay writes the
+  target for step t+N (it knows the future trajectory); the watchdog
+  compares against the TARGET pose, the tier-(b) summary against the
+  recorded step.  Saturated at the episode end.
+- --damping-scale: exposed (default 2.5 kept; the spec's nominal is
+  1.0).  Lag-model sim (first-order tau, equilibrium sag = -off):
+  tau 0.50 + k=7 -> drift 0.127; tau 0.20 + k=2 -> drift 0.050;
+  tau 0.33 + k=4 -> drift 0.079.  Recommend damping 1.0 + lookahead 2
+  first; fallback damping 2.5 + lookahead 7 if it rings.
+
+BUILD_TAG rung-b-2026-08-29-lookahead.
+
+## Follow-up: lookahead tuning — measured lag tau=0.28 s (2026-08-29)
+
+Damping 1.0 + lookahead 2 carried the replay through the whole deep
+section (z tracking within 1 cm: 0.159 vs 0.159 at step 80) and died
+at step 95 (drift exactly 0.200) on the fast RISE, whose recorded
+deltas (0.044 rad/step) are ~1.5x the opening's.  Lookahead 7 with
+damping 2.5 (tau ~0.5 s) over-compensated the opening transient and
+aborted at step 17.
+
+CSV-vs-fixture lag measurement: tau = 0.28 s at damping 1.0 (lag
+0.165 rad at v 0.6 rad/s on the rise; consistent with the opening at
+k=2).  Lag-model sim: k=4 -> drift 0.063; k=3 -> 0.073; k=2 -> 0.095.
+Next run: --damping-scale 1.0 --lookahead 4 (flags already in the
+image — no rebuild).
+
+## Follow-up: speed-adaptive look-ahead (2026-08-29)
+
+k=4 still lagged the rise (drift 0.201 at step 94): the lag is
+tau x velocity and tau is POSITION-DEPENDENT — 0.28 s on the opening
+descent, ~0.44-0.53 s on the rise out of the deep pose (the J^T Kx J
+stiffness shrinks when the arm is folded low, softening the plant).
+A fixed look-ahead cannot cover both.  Added --lag-gain: k(t) =
+round(GAIN x recorded step size), capped at 8 — the look-ahead now
+scales with the speed like the lag does.  Sim: gain 100 -> drift
+0.067 (tau 0.28) / 0.118 (tau 0.40).  Next run: --damping-scale 1.0
+--lag-gain 100.
+
+## Follow-up: the circles explained — the FCI compensates gravity, our term double-compensates (2026-08-29)
+
+Both lag-gain runs aborted at the SAME steps 93-95 with drift
+0.20-0.22: the look-ahead only touches the fast sections, while a
+STATIC ~0.11-0.13 rad error persists through the slow deep section —
+the bias changed between runs (q6 by 1.12 Nm = 0.11 rad on Kq6=10),
+invalidating the offsets measured with the previous bias.  The two
+corrections fight; every bias re-calibration re-breaks the offsets.
+
+The deeper evidence (the calibration settle measurements) proves the
+Franka FCI already holds the arm against gravity: at every settle the
+arm rested perfectly still while our commanded torque was ~0 — an
+unsupported arm would collapse.  Our model-gravity term therefore
+DOUBLE-compensates and creates the pose-dependent sag
+(q* = q_d + K^-1(g+bias)) that the bias + offsets were fighting.
+
+Added --no-gravity (loop + smoke): pure PD, no model gravity, no
+bias.  Decisive hardware test: the hold gate WITHOUT gravity — if the
+arm holds the reset pose with ~no sag, the FCI compensates everything
+and the gravity term/bias/offsets are all removed permanently.  If it
+sags by the payload load, the FCI covers the bare arm only and the
+remaining step is a fitted payload gravity term (the 27-hold
+measurements now have a clean interpretation).  BUILD_TAG
+rung-b-2026-08-29-purepd.
+
+## MILESTONE: tier-(b) replay CERTIFIED on ep_001 (2026-08-29)
+
+pure PD (--no-gravity) + damping 1.0 + lag-gain 25 ran all 150 steps:
+median err 0.0051, p95 0.0139, free-motion drift 0.1282 — the gate
+(0.04/0.08/0.15) PASSES.  The certified architecture: the FCI holds
+the bare arm; our loop is PD + speed-matched look-ahead.
+
+The remaining static ~0.05-0.07 rad is the uncompensated Robotiq+ZED
+payload (the FCI doesn't know it).  Added the payload path:
+- PandaModel.payload_gravity(q) (payload-only term).
+- ImpedanceLoop gravity_mode: full | payload | none.
+- control_loop --gravity-mode/--payload-com (--no-gravity = alias for
+  none); build_loop_argv passes both.
+- --calibrate-path under --no-gravity now FITS the payload mass/COM
+  from the pure-PD holds (spring torque = payload gravity) and prints
+  the replay command line; fit_payload = grid + coordinate polish.
+- BUILD_TAG rung-b-2026-08-29-payload.  Suite: 169 pass / 3 xfail.
+
+Next: calibrate-path (pure-PD) -> payload fit -> replay with
+--gravity-mode payload (no offsets) -> certify ep_000/ep_002.  Then
+the rollout roadmap: gripper wiring/driver, r2d2 driver integration,
+c3po policy client (JOINT_POSITION -> velocity), DROID camera
+conventions, end-to-end pi0.5 test.
+
+## Follow-up: ep_000/001 pass; ep_002 opening ramp; payload fit needs extended poses (2026-08-29)
+
+ep_000 (median 0.0041, drift 0.1271) and ep_001 (median 0.0043, drift
+0.1316) PASS tier-(b) under pure PD + gain 25.  ep_002 aborted at step
+11: its opening is a hard ramp (dq 0 -> 0.073 rad/step, the fastest of
+all fixtures); the arm's lag there is 0.245 s (grows with speed via
+damping) vs the 0.11 s the gain-25 look-ahead assumes.  Fix: --lag-gain
+45 (k=3 at the ramp; the small over-lead on the slower episodes is
+harmless).
+
+The payload fit from the episode holds returned mass 0: at the high-z
+holds the payload only produces 1-3 Nm — under the friction noise.
+Added --calibrate-payload: holds 4 EXTENDED poses (raised + straight,
+wrist-rolled, elbow variants) where the payload lever is maximal
+(6-10 Nm of signal) and fits mass + COM from the sag.
+
+Robotiq 2F-85 is wired to the NUC via USB — the gripper dimension
+(driver + 8th action/observation) lands in the driver-integration
+milestone.  BUILD_TAG rung-b-2026-08-29-payload2.
+
+## Follow-up: calibrate-payload joint-limit reflexes — illegal elbow-roll poses (2026-08-29)
+
+The payload poses requested elbow-roll (joint 4, index 3) = 0.0 — but
+its range is (-3.07, -0.0698), ALWAYS negative; the arm drove into the
+hard limit (joint_reflex, joint-limit recovery, velocity violation,
+~131-256 Hz loop under the recovery churn).  Fixed: all poses use
+-0.90 there, the wrist roll reduced 1.3 -> 0.8 rad, and the
+calibration slews slow to 0.03 rad/step (gentler on the 2+ rad
+swings).  Pose FK verified: flange z 0.80-0.82 m, x ~0.6 m — ~70 cm
+clear of the table.  BUILD_TAG rung-b-2026-08-29-payload3.
+
+## Follow-up: payload mass 0 is CORRECT; watchdog reference fix (2026-08-29)
+
+The extended-pose holds measure only ~2 Nm of payload gravity (an
+uncompensated 1.4 kg at 0.63 m would be ~8 Nm on the shoulder) — the
+FCI compensates the gripper+camera itself (the Desk end-effector load
+setting feeds the FCI model).  mass 0 is the honest fit: no payload
+term needed, pure PD stands.  (Check Desk -> End-Effector for the
+configured mass/COM, for the record.)
+
+ep_002's abort was the watchdog comparing the arm against the
+LOOK-AHEAD target, tripping on the look-ahead itself (the arm was only
+0.09 rad behind the RECORDED pose at the abort).  Fixed: joint drift
+checks vs the recorded step (fidelity), flange z vs the target step
+(safety).  BUILD_TAG rung-b-2026-08-29-payload4.  ep_002 re-run with
+--lag-gain 100 (the ramp is a transient; a bigger look-ahead pre-tracks
+the onset).
+
+## Milestone: packaging — M1/M2/M3 landed, test suite first (2026-08-29)
+
+The certified executor is packaged into the project, tests first per
+the user's order:
+
+- M1: certified defaults in FrankaRobotConfig (control_mode,
+  impedance damping 1.0 / pace 1.5 / gravity-mode none, payload,
+  z_floor 0.10); episode-geometry preflight refuses episodes whose
+  recorded flange envelope dips below the cell floor BEFORE motion
+  (ep_002's table lesson) — wired into --replay.
+- M2: FrankaRobot control_mode="impedance" — connect/disconnect own
+  the shim+loop lifecycle, DROID velocity actions write through the
+  executor (shared validation refactored out), observations from
+  executor state, reset = executor slew; the franky backend stays
+  behind the config.  station.droid.yaml switches to impedance.
+- M3: Robotiq wrapper pinned against a fake backend (bit encoding,
+  DROID width conventions, activation).
+- Tests: test_episode_geometry.py, test_driver_executor_mode.py
+  (fake-executor contract + certified argv), test_gripper.py.
+  Suites: plugin 190 pass / 3 xfail; core B1 27 pass.
+- roadmap_droid_rollout.md records M1-M6; M4 (policy client) and M5
+  (cameras) are next.
+
+Open hardware items: first USB activation of the Robotiq on the NUC;
+first live policy actions through the impedance driver path.
+
+## Follow-up: station-launch flare — the loop chased the zeroed startup channel (2026-09-01)
+
+droid.sh launched the NEW impedance runtime correctly (transport up,
+Robotiq activated, ZEDs streaming) — but the arm flared UPRIGHT: the
+shim memsets the target channel to zeros at startup, and the loop
+chased those zeros at 1.5 rad/s straight into the joint limits
+("[droid-shim] joint-limit recovery ok" x2, then Reflex), where it sat
+in manual recovery: the reset blocked and every policy action died —
+the fake-policy run's "no motion" was the reflex state, not the
+pipeline.  (The pre-existing stale-zero guard only initialized the
+EFFECTIVE target from the live state; it never stopped the CHASE of a
+zeroed WRITTEN channel.)
+
+Fixes:
+- The loop now HOLDS the live pose on in-control entry when the target
+  channel is the pristine zeroed segment (seq == 0) and resumes chasing
+  on the first real write (read_target_with_seq tracks the counter).
+- ImpedanceExecutor.start() seeds the target channel with the live
+  pose (belt-and-braces).
+- The policy client now paces its step loop at the station's control
+  rate (the fake-policy run free-ran at ~1.2 kHz, racing the 15 Hz
+  server).
+- r2d2's config loader now REFUSES unknown robot-block keys (the
+  silent filter ran the old franky driver against the new yaml on a
+  stale image — exactly the 2026-09-01 morning's no-motion session).
+
+BUILD_TAG rung-b-2026-09-01-holdzero.  Rebuild, relaunch droid.sh: the
+arm must hold where it is (no flare); fake-policy should show a gentle
+15 Hz +/-0.1 rad oscillation; then the real pi05_droid rollout.
+
+franky question: KEEP the franky backend for now — it is the only
+control-box fallback and the impedance LIVE path is exactly what this
+week is certifying; remove it as a cleanup milestone after the live
+rollout passes (the impedance path already never touches franky).
+
+## Follow-up: the flare persisted — the seed wrote the ZEROED state; live pace = recorded gain (2026-09-02)
+
+Second flare at launch, same reflexes: the hold-zero fix guarded a
+pristine seq==0 channel, but ImpedanceExecutor.start() seeded the
+target with the FIRST state it read — the pristine ZEROED segment (a
+zeroed seqlock channel reads as valid), making the channel look
+freshly written.  The loop then chased those zeros into the joint
+limits again.  Fix: start() seeds ONLY from a live is_in_control state
+(the loop then holds or chases the live pose — no flare either way).
+
+The fake policy then MOVED but was violent: the live path realizes
+commands at full speed (v=0.49 -> 0.098 rad/step ~ 1.5 rad/s), while
+the recorded DROID plant realized 0.21-0.28 of each commanded step.
+Added impedance_action_gain (default 0.25, the measured recorded-plant
+gain) applied to the velocity stream in the driver's impedance branch;
+station.droid.yaml sets it.  pi0.5's "arm curls in on itself" was the
+same full-speed realization of far JOINT_POSITION targets — the gain
+restores the recorded pace (the checkpoint's actions are then
+approached exactly as DROID's own arm did).
+
+BUILD_TAG rung-b-2026-09-02-gain025.  Next: rebuild, relaunch (arm
+must hold at launch, no joint-limit lines), fake policy should be a
+gentle 15 Hz drift at ~0.25x pace, then the pi05_droid rollout.
+
+## Follow-up: e-stop snap-back fixed (hold on every control entry); live-speed measurement mode (2026-09-02)
+
+The e-stop test snapped the arm back to the pre-stop pose: the hold
+only guarded the pristine zeroed channel, but after a rollout the
+channel carries the LAST written target — on re-entry the loop chased
+it.  The loop now holds the live pose on EVERY control entry (startup
+or recovery) until the first new write lands — a stale pre-recovery
+target is never right to chase.  Loop tests restructured to the
+delayed-write pattern (writes land after entry); the clamp gets its
+own pure-function test.
+
+For the pi0.5 speed question, added --measure-live-gain: a
+deterministic 15 Hz velocity sweep through the LIVE chain (with the
+--action-gain scaling) prints the realized motion per unit commanded
+velocity vs the recorded plant's distribution (median realized/
+commanded 0.2134 -> 0.0427 rad/step per unit |v|, from the fixture
+measurements) and the exact recommended impedance_action_gain.  This
+separates the speed axis from the policy-quality axis.
+
+BUILD_TAG rung-b-2026-09-02-measure.  Next: run --measure-live-gain,
+set impedance_action_gain to the printed value, re-rollout.
+
+## Follow-up: the 0.39 recommendation was friction-dominated; measurement fixed (2026-09-02)
+
+The first --measure-live-gain sweep (amplitude 0.3, gained steps
+<= 0.015 rad) sat inside the joint friction band: the arm realized
+only 0.137 of the commanded deltas and the recommendation (0.39) was
+an over-read — the 0.39 rollout moved ~1.3-1.5x the dataset-faithful
+pace.  Fixes: the sweep amplitude is 0.8 (recorded-scale commands);
+the analysis splits the OVERALL median from the FRICTION-FREE median
+(|v_gained| x 0.2 > 0.03 rad) and recommends from the friction-free
+band with the corrected formula (gain = recorded_per_unit / free —
+free is per-GAINED velocity).  The station gain reverts to 0.25 (the
+dataset's own number) pending the corrected measurement.  The driver
+gains an action_log telemetry knob: every impedance action appends
+(t, gained velocity, arm q) — the next pi0.5 rollout produces the
+realized-vs-commanded CSV that separates the SPEED axis from the
+POLICY/observation axis.  BUILD_TAG rung-b-2026-09-02-gainmeasure2.
+
+## Follow-up: the 1.00 reading — a sine is the wrong excitation; episode-based measurement added (2026-09-02)
+
+The sine sweep's realized/(v x 0.2) ratio collapses by GEOMETRY, not
+by the arm's tracking: for an oscillating command the target stays
++-(v x 0.2) from the anchor while its net per-step motion is only the
+sine's slope.  The honest measurement drives STEP-LIKE commands
+(random velocities, like real policy actions) or — the ground truth —
+the RECORDED episode's own action stream: --measure-episode NPZ runs
+the recorded velocities through the live path and compares the
+realized motion against the recorded arm's own realized motion (the
+very distribution the 0.2134 reference came from), printing the scale
+and the exact recommended gain.  BUILD_TAG rung-b-2026-09-02-epgain.
