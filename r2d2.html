@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>r2d2 — station setup · n-droids</title>
+<meta name="description" content="Build and run the r2d2 station server: network, Docker image, station.yaml, launch scripts, calibration, and adding new hardware.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='3.5' fill='%23b45309'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5" opacity=".35"/>
+        <circle cx="10" cy="10" r="3.5" fill="currentColor"/>
+      </svg>
+      n-droids
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="c3po.html">Client · c3po</a>
+      <a href="r2d2.html" aria-current="page">Station · r2d2</a>
+      <a class="nav-ext" href="https://github.com/kaolab-research/r2d2">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="page-head">
+  <div class="wrap">
+    <p class="crumbs"><a href="index.html">Overview</a><span>/</span>Station</p>
+    <h1>Setting up an r2d2 station</h1>
+    <p class="lead">
+      One small computer next to the robot, one Docker container, one YAML file. You do this once
+      per arm — after that, everyone in the lab just connects to it.
+    </p>
+  </div>
+</section>
+
+<div class="wrap">
+<div class="doc">
+
+<article>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="overview">
+    <h2>What you are building</h2>
+    <p>
+      r2d2 runs on the machine physically wired to the robot — a NUC, a mini-PC, any Linux box on
+      the same bench. It owns the motor buses, the cameras, the teleop devices and the dataset
+      writer. It never runs a policy, and it exposes everything through one WebSocket on port 9090
+      plus an HTTP endpoint on 9091 for pulling datasets off.
+    </p>
+
+    <ul class="kv">
+      <li><span class="k">webSocket</span><span class="v">Port 9090 — control, joint state, camera frames.</span></li>
+      <li><span class="k">http</span><span class="v">Port 9091 — serves finished datasets for download.</span></li>
+      <li><span class="k">config</span><span class="v">One YAML file, mounted at <code>/config/station.yaml</code>.</span></li>
+      <li><span class="k">storage</span><span class="v">Datasets land in <code>/datasets</code> on the station.</span></li>
+      <li><span class="k">entrypoint</span><span class="v"><code>r2d2-server --config /config/station.yaml</code></span></li>
+    </ul>
+
+    <div class="callout callout-note">
+      <span class="callout-icon" aria-hidden="true">i</span>
+      <div>
+        <p>
+          <strong>Hardware safety stays where it belongs.</strong> The station relays setpoints. Each
+          arm's own controller keeps its real-time loop, its force limits and its reflexes, and the
+          physical e-stop remains the stop mechanism. Running r2d2 does not require a real-time
+          kernel — the exception is a Franka Panda, whose FCI link does.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="prerequisites">
+    <h2>Prerequisites</h2>
+    <ul>
+      <li><strong>Ubuntu or Debian on the station host</strong>, with Docker installed and your user in the <code>docker</code> group.</li>
+      <li><strong>The robot and its cameras</strong> attached by USB or Ethernet, powered, and in a safe state.</li>
+      <li><strong>An Ethernet cable</strong> to the machine that will run your code.</li>
+      <li><strong>Roughly 1 GB of disk</strong> for the image, plus room for datasets.</li>
+    </ul>
+    <p class="small muted">
+      A Franka Panda station needs more — a PREEMPT_RT kernel, the ZED SDK, CUDA and the NVIDIA
+      Container Toolkit. See <a href="#franka">the Franka section</a>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="setup">
+    <h2>Setup</h2>
+
+    <ol class="steps">
+
+      <li>
+        <h3>Put both machines on the same subnet</h3>
+        <p>
+          The station takes <code>10.42.0.1</code> and your client machine takes
+          <code>10.42.0.2</code>. These are private addresses on a cable that carries nothing else.
+        </p>
+        <div class="code-block">
+          <div class="code-label"><span>on the station</span></div>
+          <pre><code class="lang-bash">sudo ip addr add 10.42.0.1/24 dev &lt;station-interface&gt;</code></pre>
+        </div>
+        <div class="code-block">
+          <div class="code-label"><span>on the client machine</span></div>
+          <pre><code class="lang-bash">sudo ip addr add 10.42.0.2/24 dev &lt;client-interface&gt;</code></pre>
+        </div>
+        <p>
+          Verify from the client with <code>ping 10.42.0.1</code>. The addresses are lost on reboot
+          unless you persist them with netplan or NetworkManager — see
+          <a href="https://github.com/kaolab-research/n-droids/blob/main/network_setup.md">the network guide</a>.
+        </p>
+      </li>
+
+      <li>
+        <h3>Build the image</h3>
+        <p>
+          The build clones LeRobot v0.6.0, applies two patches that make it torch-optional, and
+          installs the hardware plugins. Nothing CUDA-related is baked in.
+        </p>
+        <div class="code-block">
+          <div class="code-label"><span>on the station</span></div>
+          <pre><code class="lang-bash">git clone https://github.com/kaolab-research/r2d2.git
+cd r2d2
+docker build -t r2d2:latest .</code></pre>
+        </div>
+      </li>
+
+      <li>
+        <h3>Find your device paths</h3>
+        <p>
+          <code>/dev/ttyACM0</code> and <code>/dev/video0</code> are assigned in enumeration order and
+          will swap across reboots. Use the <code>by-path</code> symlinks instead — they are tied to
+          physical USB ports, and they work even for cameras with no serial number.
+        </p>
+        <div class="code-block">
+          <div class="code-label"><span>on the station</span></div>
+          <pre><code class="lang-bash">ls -l /dev/serial/by-path/    # arms, leaders, serial grippers
+ls -l /dev/v4l/by-path/       # UVC cameras</code></pre>
+        </div>
+        <p class="small muted">
+          Unplug a device and re-run the command to identify which symlink belongs to which device —
+          the one that disappears is the one you want.
+        </p>
+      </li>
+
+      <li>
+        <h3>Write the station config</h3>
+        <p>
+          The YAML maps almost one-to-one onto LeRobot's config dataclasses. Copy one of the
+          ready-made files in <code>config/</code> and edit the paths.
+        </p>
+
+        <div class="code-block">
+          <div class="code-label"><span>config/station.so101.yaml</span></div>
+          <pre><code class="lang-yaml">station_model: so101_teleop      # identifier reported to clients
+
+robot:
+  type: so_follower              # -> LeRobot SOFollower
+  id: my_follower_arm            # matches the calibration file name
+  port: /dev/serial/by-path/pci-0000:00:14.0-usb-0:7:1.0
+  baudrate: 1000000
+  cameras:
+    front_rgb:
+      type: opencv               # -> LeRobot OpenCVCamera
+      index_or_path: /dev/v4l/by-path/pci-0000:00:14.0-usb-0:14:1.0-video-index0
+      width: 640
+      height: 480
+      fps: 30
+
+teleop:
+  type: so_leader                # the leader arm appears as a controller
+  id: my_leader_arm
+  port: /dev/serial/by-path/pci-0000:00:14.0-usb-0:6:1.0
+  baudrate: 1000000</code></pre>
+        </div>
+
+        <div class="callout callout-tip">
+          <span class="callout-icon" aria-hidden="true">✓</span>
+          <div>
+            <p>
+              <strong>No teleop device?</strong> Drop the <code>teleop:</code> block — a station with
+              only a follower is valid, and a client can command it directly.
+            </p>
+          </div>
+        </div>
+      </li>
+
+      <li>
+        <h3>Launch it</h3>
+        <p>
+          Each config has a matching launch script that handles device passthrough, the calibration
+          mount and the dataset volume.
+        </p>
+        <div class="code-block">
+          <div class="code-label"><span>on the station</span></div>
+          <pre><code class="lang-bash">./launch_scripts/so101_uvc.sh
+docker logs -f r2d2-so101-uvc</code></pre>
+        </div>
+        <p>Available scripts:</p>
+        <ul class="small muted">
+          <li><code>toy.sh</code> — synthetic station, no hardware at all</li>
+          <li><code>so101_uvc.sh</code> · <code>so101_dual_uvc.sh</code> · <code>so101_all_cams.sh</code> · <code>so101_realsense.sh</code> · <code>so101_nocam.sh</code></li>
+          <li><code>rebot_bimanual_2realsense.sh</code> · <code>rebot_bimanual_3realsense.sh</code> · <code>rebot_bimanual_nocam.sh</code></li>
+          <li><code>droid.sh</code> — Franka Panda + Robotiq + 2× ZED</li>
+        </ul>
+      </li>
+
+      <li>
+        <h3>Verify</h3>
+        <p>
+          From the client machine, confirm the handshake and read back the manifest:
+        </p>
+        <div class="code-block">
+          <div class="code-label"><span>on the client machine</span></div>
+          <pre><code class="lang-python">from c3po import Robot
+
+with Robot(host="10.42.0.1") as robot:
+    print(robot.station_model, robot.arms, robot.cameras, robot.controllers)
+    print(robot.spec())</code></pre>
+        </div>
+        <p>
+          If that prints your station, you are done. Anyone with the cable and c3po installed can now
+          use the arm.
+        </p>
+      </li>
+
+    </ol>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="calibration">
+    <h2>Calibration</h2>
+    <p>
+      The station connects with <code>calibrate=False</code> — it expects a calibration file to
+      already exist and mounts it from the host:
+    </p>
+    <div class="code-block">
+      <div class="code-label"><span>docker run</span></div>
+      <pre><code class="lang-bash">-v ~/.cache/huggingface/lerobot/calibration:/root/.cache/huggingface/lerobot/calibration</code></pre>
+    </div>
+    <p>
+      The value of <code>id:</code> in your station config (for example
+      <code>my_follower_arm</code>) must match the calibration file for that arm. Calibrate once
+      using LeRobot's own tooling on the host, and every client thereafter inherits it.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="toy">
+    <h2>Development without hardware</h2>
+    <p>
+      Toy mode publishes synthetic joint states and camera frames, so you can write and test client
+      code with no robot connected:
+    </p>
+    <div class="code-block">
+      <div class="code-label"><span>shell</span></div>
+      <pre><code class="lang-bash">./launch_scripts/toy.sh
+
+# or directly, on any machine:
+r2d2-server --toy</code></pre>
+    </div>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon" aria-hidden="true">!</span>
+      <div>
+        <p>
+          <strong>Use the <code>r2d2-server</code> command, not <code>python -m r2d2._server</code>.</strong>
+          The module has no <code>__main__</code> guard, so running it as a module exits silently
+          without starting anything. The console script is the supported entry point.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="franka">
+    <h2>Franka Panda station</h2>
+    <p>
+      The <code>droid</code> station — Panda + Robotiq 2F-85 + two ZED cameras — is the one
+      configuration with real host requirements, because the FCI link is genuinely real-time and the
+      ZED SDK needs the GPU stack.
+    </p>
+
+    <ul>
+      <li>PREEMPT_RT kernel: <code>sudo pro enable realtime-kernel</code></li>
+      <li>A <code>realtime</code> group, with your user in it, and raised <code>rtprio</code>/<code>memlock</code> limits</li>
+      <li>Stereolabs ZED SDK installed on the host</li>
+      <li>CUDA installed on the host — the ZED SDK links against the CUDA runtime</li>
+      <li>NVIDIA Container Toolkit, so <code>--gpus all</code> can supply the driver libraries</li>
+      <li>Franka Desk: joints unlocked and FCI mode active</li>
+    </ul>
+
+    <p>
+      The launch script mounts the host's ZED libraries, CUDA runtime and SDK settings, and runs the
+      container with <code>--network=host --privileged --gpus all</code>. The Python bindings for
+      ZED are baked into the image, version-matched to the host SDK through a build argument:
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>shell</span></div>
+      <pre><code class="lang-bash">docker build -t r2d2:latest --build-arg ZED_SDK_VERSION=5.4.1 .
+./launch_scripts/droid.sh</code></pre>
+    </div>
+
+    <p>
+      The arm itself is driven by a C++ shim holding the 1 kHz FCI torque loop over shared memory,
+      with a Python loop computing torque from targets the driver writes at the policy rate. DROID
+      actions are joint velocities plus a gripper position, and the station is pinned to 15 Hz.
+    </p>
+
+    <p class="small muted">
+      Full host instructions, including the real-time kernel and Desk configuration, are in
+      <a href="https://github.com/kaolab-research/n-droids/blob/main/franka_setup.md">franka_setup.md</a>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="plugins">
+    <h2>Adding hardware LeRobot doesn't support</h2>
+    <p>
+      Anything upstream doesn't ship is an ordinary plugin package — no changes to the server, the
+      protocol or the manifest. It is discovered through LeRobot's own plugin mechanism.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>layout</span></div>
+      <pre><code class="lang-text">plugins/lerobot_robot_myarm/
+├── pyproject.toml                  # name must start with lerobot_robot_
+└── src/lerobot_robot_myarm/
+    ├── __init__.py                 # exports the driver
+    ├── config_myarm.py             # RobotConfig subclass
+    └── myarm.py                    # Robot subclass</code></pre>
+    </div>
+
+    <ol>
+      <li>The dist name starts with <code>lerobot_robot_</code> or <code>lerobot_camera_</code>.</li>
+      <li>The config class is decorated with <code>@RobotConfig.register_subclass("myarm")</code>.</li>
+      <li>The driver class is named after the config with <code>Config</code> stripped.</li>
+      <li>Both are exported from the package's <code>__init__.py</code>.</li>
+    </ol>
+
+    <p>
+      Then reference it from <code>station.yaml</code> with <code>type: myarm</code>. Everything else
+      — manifest, recording, watchdog, cameras — works unchanged.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="tests">
+    <h2>Running the tests</h2>
+    <p>
+      The suite runs against the toy station and covers the protocol, streaming, recording and
+      spec/status messages end to end. Hardware backends are exercised through fakes, so it runs
+      anywhere:
+    </p>
+    <div class="code-block">
+      <div class="code-label"><span>shell</span></div>
+      <pre><code class="lang-bash">cd r2d2
+uv run pytest</code></pre>
+    </div>
+    <p class="small muted">
+      Plugin suites live alongside their packages:
+      <code>plugins/lerobot_robot_franka</code> and <code>plugins/lerobot_camera_zed</code>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="protocol">
+    <h2>The compatibility boundary</h2>
+    <p>
+      Clients and stations are versioned independently. The contract between them is the manifest
+      returned by a <code>describe</code> request, carrying an <code>api_version</code> — any client
+      with the same major version can talk to any station.
+    </p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Channel</th>
+            <th scope="col">Format</th>
+            <th scope="col">Carries</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Text frames</td>
+            <td>JSON</td>
+            <td><code>describe</code>, observations, actions, recording commands, status events</td>
+          </tr>
+          <tr>
+            <td>Binary frames</td>
+            <td>Header + raw pixels</td>
+            <td>Camera images — RGB as <code>uint8</code>, depth as <code>uint16</code></td>
+          </tr>
+          <tr>
+            <td>HTTP :9091</td>
+            <td>Static files</td>
+            <td>Finished datasets — metadata, parquet, video</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="troubleshooting">
+    <h2>Troubleshooting</h2>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Symptom</th>
+            <th scope="col">What to check</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Client can't reach the station</td>
+            <td>
+              <code>ping 10.42.0.1</code>. If that fails, the static IPs aren't set — they do not
+              survive a reboot unless persisted.
+            </td>
+          </tr>
+          <tr>
+            <td>Arm doesn't move, logs look empty</td>
+            <td>
+              Check <code>docker logs</code> for the control rate actually achieved, and
+              <code>robot.spec()</code> from the client for overruns.
+            </td>
+          </tr>
+          <tr>
+            <td>Camera declared but no frames arrive</td>
+            <td>
+              The <code>by-path</code> symlink changed because a cable moved to a different USB port.
+              Re-run <code>ls -l /dev/v4l/by-path/</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>Devices swap between reboots</td>
+            <td>
+              You are using <code>/dev/ttyACM*</code> or <code>/dev/video*</code> instead of the
+              <code>by-path</code> symlinks.
+            </td>
+          </tr>
+          <tr>
+            <td>Calibration not found</td>
+            <td>
+              The station's <code>id:</code> doesn't match the calibration file name, or the
+              calibration directory isn't mounted.
+            </td>
+          </tr>
+          <tr>
+            <td>ZED fails with <code>libcuda.so.1: cannot open shared object file</code></td>
+            <td>
+              The NVIDIA Container Toolkit isn't installed, so <code>--gpus all</code> has nothing to
+              pass through.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr>
+
+  <p class="small muted">
+    Station running? Head to <a href="c3po.html">the c3po guide</a> to start using it.
+  </p>
+
+</article>
+
+<aside class="toc" aria-label="On this page">
+  <p class="toc-title">On this page</p>
+  <ul>
+    <li><a href="#overview">What you're building</a></li>
+    <li><a href="#prerequisites">Prerequisites</a></li>
+    <li><a href="#setup">Setup</a></li>
+    <li><a href="#calibration">Calibration</a></li>
+    <li><a href="#toy">Without hardware</a></li>
+    <li><a href="#franka">Franka Panda station</a></li>
+    <li><a href="#plugins">Adding hardware</a></li>
+    <li><a href="#tests">Running the tests</a></li>
+    <li><a href="#protocol">Compatibility</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+  </ul>
+</aside>
+
+</div>
+</div>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h2>This site</h2>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="c3po.html">Client · c3po</a></li>
+          <li><a href="r2d2.html">Station · r2d2</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Source</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/r2d2">r2d2 — station server</a></li>
+          <li><a href="https://github.com/kaolab-research/c3po">c3po — client library</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids">n-droids — plans and docs</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Reference</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan.md">Implementation plan</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan/phase_26.md">Phase log</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/network_setup.md">Network setup</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-note">
+      <p>
+        n-droids is a research project, not a product. Status claims on this site refer to what has
+        actually run on hardware in the lab; everything else is labelled.
+      </p>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>

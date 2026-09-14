@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>c3po — the client library · n-droids</title>
+<meta name="description" content="Install and use c3po: connect to a robot station, run reset/step loops, collect demonstrations, and download datasets.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='3.5' fill='%23b45309'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5" opacity=".35"/>
+        <circle cx="10" cy="10" r="3.5" fill="currentColor"/>
+      </svg>
+      n-droids
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html">Overview</a>
+      <a href="c3po.html" aria-current="page">Client · c3po</a>
+      <a href="r2d2.html">Station · r2d2</a>
+      <a class="nav-ext" href="https://github.com/kaolab-research/r2d2">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="page-head">
+  <div class="wrap">
+    <p class="crumbs"><a href="index.html">Overview</a><span>/</span>Client</p>
+    <h1>The c3po client</h1>
+    <p class="lead">
+      c3po is the only part of n-droids most people touch. It is a small Python library that turns a
+      robot station into a <code>Robot</code> object with a blocking <code>reset()</code> /
+      <code>step()</code> loop — no configuration files, no driver installs, no ROS.
+    </p>
+  </div>
+</section>
+
+<div class="wrap">
+<div class="doc">
+
+<article>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="install">
+    <h2>Install</h2>
+    <p>
+      c3po needs Python 3.10 or newer. Its entire runtime dependency set is
+      <code>numpy</code>, <code>Pillow</code> and <code>websocket-client</code>.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>shell</span></div>
+      <pre><code class="lang-bash">git clone https://github.com/kaolab-research/c3po.git
+cd c3po
+pip install -e .</code></pre>
+    </div>
+
+    <div class="callout callout-note">
+      <span class="callout-icon" aria-hidden="true">i</span>
+      <div>
+        <p>
+          c3po is not on PyPI yet — the name there belongs to an unrelated project. Install from the
+          repository, or vendor it into your own project with
+          <code>uv add --editable ./c3po</code>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="quickstart">
+    <h2>Quick start</h2>
+    <p>
+      Plug the Ethernet cable into the station, then connect. The constructor opens the socket,
+      performs the <code>describe</code> handshake and returns a ready object — or raises
+      <code>RobotNotFoundError</code> if the station isn't reachable.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>policy_loop.py</span></div>
+      <pre><code class="lang-python">from c3po import Robot
+
+with Robot(host="10.42.0.1") as robot:
+    print(robot.station_model, robot.arms, robot.cameras)
+
+    obs = robot.reset()
+    while True:
+        action = policy(obs)     # your code: dict of numpy arrays
+        obs = robot.step(action)</code></pre>
+    </div>
+
+    <p>
+      That is the whole interface. Everything below is detail on the three verbs —
+      <strong>connect</strong>, <strong>step</strong>, <strong>record</strong>.
+    </p>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="connect">
+    <h2>Connecting</h2>
+
+    <div class="code-block">
+      <div class="code-label"><span>python</span></div>
+      <pre><code class="lang-python">Robot(
+    host="10.42.0.1",   # station address on the point-to-point link
+    port=9090,          # WebSocket control port
+    rate=50.0,          # requested control rate in Hz
+)</code></pre>
+    </div>
+
+    <p>
+      <code>rate</code> is a <em>request</em>. The station caps it at what the hardware can sustain
+      and reports the truth back through <code>robot.spec()</code>. On a DROID station it is pinned
+      to 15 Hz.
+    </p>
+
+    <h3>Ask the station what it has</h3>
+    <p>
+      Every property below is derived from the manifest the station sends on connect. Nothing is
+      hard-coded in your script, so the same file runs against a single arm or a bimanual rig.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>python</span></div>
+      <pre><code class="lang-python">with Robot() as robot:
+    print(robot.station_model)   # "so101_teleop"
+    print(robot.control_rate)    # 50.0
+    print(robot.arms)            # ["follower"]
+    print(robot.cameras)         # ["front_rgb", "wrist_rgb"]
+    print(robot.controllers)     # ["leader"]
+    print(robot.action_keys)     # ["follower/joint_position"]
+    print(robot.joint_names)     # {"follower": ["shoulder_pan", "shoulder_lift", ...]}</code></pre>
+    </div>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon" aria-hidden="true">✓</span>
+      <div>
+        <p>
+          <strong>Write station-agnostic code.</strong> Read <code>robot.action_keys</code> and
+          <code>robot.controllers</code> instead of hard-coding key names. A script written this way
+          moves from a SO-101 to a bimanual ReBot without edits.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="loop">
+    <h2>The loop</h2>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Call</th>
+            <th scope="col">What it does</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>reset()</code></td>
+            <td>
+              Signals a new episode and returns the first observation. Blocks until every expected
+              key has data — joint state, every camera, every controller.
+            </td>
+          </tr>
+          <tr>
+            <td><code>step(action)</code></td>
+            <td>
+              Sends the action, then blocks until the next observation arrives and returns it.
+            </td>
+          </tr>
+          <tr>
+            <td><code>step(None)</code></td>
+            <td>Read-only step: wait for the next observation without commanding anything.</td>
+          </tr>
+          <tr>
+            <td><code>close()</code></td>
+            <td>Disconnect. Called for you when the <code>with</code> block exits.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The station owns the cadence. If your policy takes 3 ms and the station runs at 50 Hz,
+      <code>step()</code> blocks for the remaining 17 ms — so your loop is paced correctly without
+      any timing code. A slow policy does not double-wait; it simply runs at the speed it can.
+    </p>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon" aria-hidden="true">!</span>
+      <div>
+        <p>
+          <strong><code>step()</code> is synchronous.</strong> There is no async variant. If you need
+          inference off the critical path, run the loop in a worker thread or keep your policy fast —
+          a slow policy directly slows the robot.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="data">
+    <h2>Observations and actions</h2>
+    <p>
+      Both are flat dictionaries of NumPy arrays. Keys are namespaced by the device they come from.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>observation</span></div>
+      <pre><code class="lang-python">{
+    "follower/joint_position": np.ndarray,  # (6,)   float64, radians
+    "follower/joint_velocity": np.ndarray,  # (6,)   float64, rad/s
+    "leader/joint_position":   np.ndarray,  # (6,)   float64, radians
+    "front_rgb":               np.ndarray,  # (480, 640, 3)  uint8
+    "wrist_rgb":               np.ndarray,  # (480, 640, 3)  uint8
+}</code></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-label"><span>action</span></div>
+      <pre><code class="lang-python">{"follower/joint_position": np.ndarray}  # shape (6,), matching robot.action_keys</code></pre>
+    </div>
+
+    <h3>Key conventions</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Pattern</th>
+            <th scope="col">Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>{arm}/joint_position</code></td>
+            <td>Joint angles in radians.</td>
+          </tr>
+          <tr>
+            <td><code>{arm}/joint_velocity</code></td>
+            <td>Joint velocities in rad/s.</td>
+          </tr>
+          <tr>
+            <td><code>{controller}/joint_position</code></td>
+            <td>A teleop device's reading — a leader arm, a gamepad.</td>
+          </tr>
+          <tr>
+            <td><code>{camera}</code></td>
+            <td>An image. Depth streams arrive as <code>uint16</code> millimetres.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon" aria-hidden="true">✓</span>
+      <div>
+        <p>
+          <strong>Teleop is a dictionary lookup.</strong> Because leader arms are just another key in
+          the observation, leader-follower teleoperation is one line:
+          <code>robot.step({"{arm}/joint_position": obs["{leader}/joint_position"]})</code>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="recording">
+    <h2>Collecting demonstrations</h2>
+    <p>
+      Recording happens on the station. Your loop does not change; you just wrap it in
+      <code>robot.recording(...)</code>.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>collect.py</span></div>
+      <pre><code class="lang-python">from c3po import Robot
+
+with Robot(host="10.42.0.1") as robot:
+    robot.on_status = lambda event, msg, data: print(f"[r2d2] {event}: {msg}")
+
+    with robot.recording("session_001") as rec:
+        while not rec.stop:
+            obs = robot.reset()                  # new episode
+            while not rec.stop and not rec.done:
+                robot.step({
+                    "follower/joint_position": obs["leader/joint_position"],
+                })
+            if rec.rerecord:
+                robot.cancel_episode()           # throw this episode away
+            rec.clear()                          # reset the flags</code></pre>
+    </div>
+
+    <h3>Keyboard controls</h3>
+    <p>
+      While a recording is active, c3po listens on the terminal for the same three keys LeRobot
+      uses — no extra dependencies, and the same muscle memory.
+    </p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Key</th>
+            <th scope="col">Flag</th>
+            <th scope="col">Effect</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>n</code></td>
+            <td><code>rec.done</code></td>
+            <td>Finish this episode and start the next one.</td>
+          </tr>
+          <tr>
+            <td><code>r</code></td>
+            <td><code>rec.rerecord</code></td>
+            <td>Discard the current episode and redo it.</td>
+          </tr>
+          <tr>
+            <td><code>q</code></td>
+            <td><code>rec.stop</code></td>
+            <td>Stop recording, finalize and close the dataset.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="small muted">
+      On Windows the listener degrades to a no-op; use Ctrl+C to stop and the context manager still
+      finalizes the dataset cleanly.
+    </p>
+
+    <h3>Task-aware episode ends</h3>
+    <p>
+      Keyboard control and programmatic termination coexist. <code>reward</code> and
+      <code>done</code> are stored with the frame as dataset metadata — they do not affect the
+      control loop.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>python</span></div>
+      <pre><code class="lang-python">for _ in range(max_steps):
+    if task_complete(obs):
+        robot.step(policy(obs), reward=1.0, done=True)
+        break
+    obs = robot.step(policy(obs), reward=0.0)</code></pre>
+    </div>
+
+    <h3>Getting the data back</h3>
+    <p>
+      A finished dataset is served over HTTP on port 9091. Pull the whole tree — parquet, metadata
+      and video — across the same cable, then clear it off the station.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>python</span></div>
+      <pre><code class="lang-python">with Robot(host="10.42.0.1") as robot:
+    with robot.recording("session_001") as rec:
+        ...                                   # collect episodes
+
+    # Wait for the station to finish writing, then fetch it.
+    robot.wait_for_status("dataset_ready", timeout=120.0)
+    path = robot.download_dataset("session_001", dest="~/datasets")
+
+    # The station is control-only storage — reclaim the space.
+    robot.delete_dataset("session_001")</code></pre>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="introspection">
+    <h2>Runtime introspection</h2>
+    <p>
+      Two ways to see what the station is actually doing: ask for a snapshot, or subscribe to
+      events.
+    </p>
+
+    <div class="code-block">
+      <div class="code-label"><span>python</span></div>
+      <pre><code class="lang-python">print(robot.spec())   # effective control rate, camera FPS, recording state
+
+robot.on_status = lambda event, message, data: handle(event, data)</code></pre>
+    </div>
+
+    <p>Status events the station pushes:</p>
+    <div class="split">
+      <ul class="small muted">
+        <li><code>recording_started</code></li>
+        <li><code>episode_finalized</code></li>
+        <li><code>episode_discarded</code></li>
+        <li><code>dataset_ready</code></li>
+        <li><code>watchdog_triggered</code></li>
+      </ul>
+      <ul class="small muted">
+        <li><code>action_rejected</code></li>
+        <li><code>camera_error</code></li>
+        <li><code>cycle_overrun</code></li>
+        <li><code>arm_reset_complete</code></li>
+        <li><code>dataset_deleted</code></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="reference">
+    <h2>Reference</h2>
+
+    <h3>Robot methods</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Method</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>reset()</code></td>
+            <td>Start an episode; return the first full observation.</td>
+          </tr>
+          <tr>
+            <td><code>step(action=None, *, reward=0.0, done=False)</code></td>
+            <td>Send an action and return the next observation.</td>
+          </tr>
+          <tr>
+            <td><code>close()</code></td>
+            <td>Disconnect and release resources.</td>
+          </tr>
+          <tr>
+            <td><code>recording(name)</code></td>
+            <td>Context manager for a dataset; returns a <code>Recording</code>.</td>
+          </tr>
+          <tr>
+            <td><code>start_recording(name)</code></td>
+            <td>Begin a dataset without the context manager.</td>
+          </tr>
+          <tr>
+            <td><code>stop_recording()</code></td>
+            <td>Finalize and close the dataset.</td>
+          </tr>
+          <tr>
+            <td><code>cancel_episode()</code></td>
+            <td>Discard the in-progress episode.</td>
+          </tr>
+          <tr>
+            <td><code>wait_for_status(event, timeout=60.0)</code></td>
+            <td>Block until a named status event arrives.</td>
+          </tr>
+          <tr>
+            <td><code>download_dataset(name, dest=".")</code></td>
+            <td>Fetch a finished dataset over HTTP; returns the local path.</td>
+          </tr>
+          <tr>
+            <td><code>delete_dataset(name)</code></td>
+            <td>Remove a dataset from the station.</td>
+          </tr>
+          <tr>
+            <td><code>spec()</code></td>
+            <td>Live metrics snapshot from the station.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Robot properties</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Property</th>
+            <th scope="col">Type</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>station_model</code></td><td>str</td><td>Station identifier, e.g. <code>"so101_teleop"</code>.</td></tr>
+          <tr><td><code>control_rate</code></td><td>float</td><td>The station's native rate in Hz.</td></tr>
+          <tr><td><code>arms</code></td><td>list[str]</td><td>Arm names.</td></tr>
+          <tr><td><code>cameras</code></td><td>list[str]</td><td>Camera keys in observations.</td></tr>
+          <tr><td><code>controllers</code></td><td>list[str]</td><td>Teleop device keys in observations.</td></tr>
+          <tr><td><code>action_keys</code></td><td>list[str]</td><td>Keys <code>step()</code> expects.</td></tr>
+          <tr><td><code>joint_names</code></td><td>dict</td><td>Arm key &rarr; ordered joint name list.</td></tr>
+          <tr><td><code>on_status</code></td><td>callable</td><td>Setter for the status callback.</td></tr>
+          <tr><td><code>camera_stream_info</code></td><td>dict</td><td>Capture and stream resolutions per camera.</td></tr>
+          <tr><td><code>controller_capabilities</code></td><td>dict</td><td>What each controller supports.</td></tr>
+          <tr><td><code>leader_home_position</code></td><td>dict</td><td>Each leader's home pose, if known.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Recording object</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Member</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>stop</code></td><td>True once <code>q</code> was pressed.</td></tr>
+          <tr><td><code>done</code></td><td>True once <code>n</code> was pressed.</td></tr>
+          <tr><td><code>rerecord</code></td><td>True once <code>r</code> was pressed.</td></tr>
+          <tr><td><code>episode_count</code></td><td>Episodes kept so far.</td></tr>
+          <tr><td><code>clear()</code></td><td>Reset <code>done</code> and <code>rerecord</code>; advance the counter.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Exceptions</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Exception</th>
+            <th scope="col">Raised when</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>RobotNotFoundError</code></td>
+            <td>The station isn't reachable, or the handshake failed.</td>
+          </tr>
+          <tr>
+            <td><code>RobotDisconnectedError</code></td>
+            <td>The connection dropped, or an observation wait timed out.</td>
+          </tr>
+          <tr>
+            <td><code>IncompatibleVersionError</code></td>
+            <td>The station reports an API major version c3po doesn't support.</td>
+          </tr>
+          <tr>
+            <td><code>ValueError</code></td>
+            <td>An action dict is missing a required key.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="examples">
+    <h2>Worked examples</h2>
+
+    <h3>Leader-follower teleoperation</h3>
+    <div class="code-block">
+      <div class="code-label"><span>teleop.py</span></div>
+      <pre><code class="lang-python">from c3po import Robot
+
+with Robot(host="10.42.0.1") as robot:
+    arm = robot.arms[0]
+    leader = robot.controllers[0]
+
+    obs = robot.reset()
+    while True:
+        obs = robot.step({f"{arm}/joint_position": obs[f"{leader}/joint_position"]})</code></pre>
+    </div>
+
+    <h3>Bimanual</h3>
+    <div class="code-block">
+      <div class="code-label"><span>bimanual_teleop.py</span></div>
+      <pre><code class="lang-python">action = {
+    "left_follower/joint_position":  obs["left_leader/joint_position"],
+    "right_follower/joint_position": obs["right_leader/joint_position"],
+}
+obs = robot.step(action)</code></pre>
+    </div>
+
+    <h3>A policy in the loop</h3>
+    <div class="code-block">
+      <div class="code-label"><span>rollout.py</span></div>
+      <pre><code class="lang-python">import numpy as np
+from c3po import Robot
+
+with Robot(host="10.42.0.1") as robot:
+    obs = robot.reset()
+    for step in range(600):
+        action_vec = policy(obs)                       # your model
+        obs = robot.step({"follower/joint_position": action_vec})
+        if step % 50 == 0:
+            print(robot.spec().effective_control_rate)</code></pre>
+    </div>
+  </section>
+
+  <!-- ================================================================ -->
+  <section class="anchor" id="troubleshooting">
+    <h2>Troubleshooting</h2>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Symptom</th>
+            <th scope="col">Likely cause</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>RobotNotFoundError</code></td>
+            <td>
+              Cable unplugged, static IPs not set, or the container isn't running. Check with
+              <code>ping 10.42.0.1</code>, then <code>docker logs -f r2d2-&lt;station&gt;</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>reset()</code> times out waiting for observations</td>
+            <td>
+              A camera is declared in the station config but isn't producing frames. The error names
+              the missing keys.
+            </td>
+          </tr>
+          <tr>
+            <td><code>ValueError</code> on <code>step()</code></td>
+            <td>The action dict doesn't match <code>robot.action_keys</code>. Print it and compare.</td>
+          </tr>
+          <tr>
+            <td><code>RobotDisconnectedError</code> right after <code>stop_recording()</code></td>
+            <td>
+              Observation streaming has stopped, so use <code>wait_for_status(...)</code> rather than
+              <code>step()</code> while the dataset finalizes.
+            </td>
+          </tr>
+          <tr>
+            <td>The loop runs slower than the station rate</td>
+            <td>Your policy is the bottleneck. <code>robot.spec()</code> shows the effective rate.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr>
+
+  <p class="small muted">
+    Setting up the other half? See <a href="r2d2.html">the r2d2 station guide</a>.
+  </p>
+
+</article>
+
+<aside class="toc" aria-label="On this page">
+  <p class="toc-title">On this page</p>
+  <ul>
+    <li><a href="#install">Install</a></li>
+    <li><a href="#quickstart">Quick start</a></li>
+    <li><a href="#connect">Connecting</a></li>
+    <li><a href="#loop">The loop</a></li>
+    <li><a href="#data">Observations &amp; actions</a></li>
+    <li><a href="#recording">Collecting demonstrations</a></li>
+    <li><a href="#introspection">Runtime introspection</a></li>
+    <li><a href="#reference">Reference</a></li>
+    <li><a href="#examples">Worked examples</a></li>
+    <li><a href="#troubleshooting">Troubleshooting</a></li>
+  </ul>
+</aside>
+
+</div>
+</div>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h2>This site</h2>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="c3po.html">Client · c3po</a></li>
+          <li><a href="r2d2.html">Station · r2d2</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Source</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/r2d2">r2d2 — station server</a></li>
+          <li><a href="https://github.com/kaolab-research/c3po">c3po — client library</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids">n-droids — plans and docs</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Reference</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan.md">Implementation plan</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan/phase_26.md">Phase log</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/network_setup.md">Network setup</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-note">
+      <p>
+        n-droids is a research project, not a product. Status claims on this site refer to what has
+        actually run on hardware in the lab; everything else is labelled.
+      </p>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>
