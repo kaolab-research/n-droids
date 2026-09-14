@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>n-droids — lightweight middleware for robot learning research</title>
+<meta name="description" content="n-droids decouples robot hardware from AI inference: a station server that owns every driver, and a three-dependency Python client you install anywhere.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='3.5' fill='%23b45309'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="brand-mark" width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="8.25" stroke="currentColor" stroke-width="1.5" opacity=".35"/>
+        <circle cx="10" cy="10" r="3.5" fill="currentColor"/>
+      </svg>
+      n-droids
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Toggle navigation">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+        <path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <nav class="site-nav" id="site-nav" aria-label="Main">
+      <a href="index.html" aria-current="page">Overview</a>
+      <a href="c3po.html">Client · c3po</a>
+      <a href="r2d2.html">Station · r2d2</a>
+      <a class="nav-ext" href="https://github.com/kaolab-research/r2d2">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Robot learning middleware</p>
+    <h1>Turn every robot arm in your lab into a URL.</h1>
+    <p class="lead">
+      n-droids decouples robot hardware from AI inference. <strong>r2d2</strong> is a container that
+      lives next to the arm and owns every driver. <strong>c3po</strong> is a three-dependency Python
+      client you install anywhere. Teleop, data collection, replay and policy rollouts become the
+      same ten-line loop.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="c3po.html">
+        Use a station <span class="arrow" aria-hidden="true">→</span>
+      </a>
+      <a class="btn btn-secondary" href="r2d2.html">Set one up</a>
+    </div>
+    <ul class="facts">
+      <li>3 runtime deps</li>
+      <li>no ROS 2</li>
+      <li>no CUDA on the client</li>
+      <li>no PyTorch on the client</li>
+      <li>Python ≥ 3.10</li>
+      <li>Linux · macOS · Windows</li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Every lab rebuilds the same plumbing</h2>
+      <p>Three costs show up in every robot learning group, and none of them are the research.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="card-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 1.5v6M8 11.2v3.3M3.4 4.4l4.2 3.9M12.6 4.4L8.4 8.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>Driver and version hell</h3>
+        <p>
+          libfranka versions are pinned to robot firmware. The ZED SDK wants CUDA; RealSense wants
+          its own runtime; every motor bus wants a different serial driver. Each new laptop becomes
+          a snowflake nobody can reproduce.
+        </p>
+      </div>
+      <div class="card">
+        <div class="card-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="1.8" y="2.5" width="12.4" height="8" rx="1.4" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M5.5 13.5h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <h3>One machine holds the robot</h3>
+        <p>
+          The workstation with the drivers, the real-time kernel and the calibration is a single
+          point of contention. One person uses the arm at a time, and nobody can bring their own
+          environment to it.
+        </p>
+      </div>
+      <div class="card">
+        <div class="card-icon" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M5.6 3.2H3.4A1.4 1.4 0 0 0 2 4.6v8.8h12V4.6a1.4 1.4 0 0 0-1.4-1.4h-2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <rect x="5.6" y="1.8" width="4.8" height="3" rx="0.9" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <h3>Every experiment is bespoke</h3>
+        <p>
+          Teleop, demonstrations, replay and policy rollouts end up as four unrelated scripts that
+          each talk to the hardware slightly differently — so results are hard to compare and code
+          is hard to hand to the next student.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-sunk">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Two halves, one boundary</h2>
+      <p>
+        Hardware lives on the station. Research code lives on your machine. They meet at a single
+        WebSocket and a machine-readable manifest.
+      </p>
+    </div>
+
+    <div class="arch">
+      <div class="arch-side">
+        <h3>Robot station</h3>
+        <span class="arch-tag">NUC · Docker · r2d2</span>
+        <ul>
+          <li>LeRobot hardware drivers</li>
+          <li>Arms, grippers, motor buses</li>
+          <li>Cameras — RGB and depth</li>
+          <li>Teleop leaders and gamepads</li>
+          <li>Calibration and safety</li>
+          <li>Dataset recording</li>
+        </ul>
+      </div>
+      <div class="arch-mid">
+        <span class="arch-arrows" aria-hidden="true">◀──▶</span>
+        <span class="arch-wire">WebSocket</span>
+        <span class="arch-port">ws://10.42.0.1:9090</span>
+        <span class="arch-port">HTTP :9091 · datasets</span>
+      </div>
+      <div class="arch-side">
+        <h3>Your machine</h3>
+        <span class="arch-tag">any OS · c3po</span>
+        <ul>
+          <li>Teleop scripts</li>
+          <li>Demonstration collection</li>
+          <li>Replay and evaluation</li>
+          <li>Policy rollouts</li>
+          <li>Analysis and visualisation</li>
+          <li>PyTorch, JAX, whatever you like</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:1rem">
+      <div class="card">
+        <h3>r2d2 owns the hardware</h3>
+        <p>
+          It runs LeRobot's robot, camera and teleoperator classes, plus plugins for the hardware
+          LeRobot doesn't ship. It never runs a policy. Joint state goes out as JSON text frames;
+          camera pixels go out as binary frames — no base64, no JSON wrapping.
+        </p>
+      </div>
+      <div class="card">
+        <h3>c3po owns the experiment</h3>
+        <p>
+          A single <code>Robot</code> object with <code>reset()</code> and <code>step(action)</code>.
+          The station owns the loop cadence, so <code>step()</code> blocks until the next
+          observation arrives and your loop is naturally paced at the station's rate.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>What you get</h2>
+      <p>Design decisions that remove configuration rather than add it.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h3>One API, any station</h3>
+        <p>
+          On connect, the client asks the station to <code>describe</code> itself and derives every
+          observation and action key from the reply. Single arm, bimanual, one camera or three — the
+          same script runs unmodified.
+        </p>
+      </div>
+      <div class="card">
+        <h3>A client that installs anywhere</h3>
+        <p>
+          <code>numpy</code>, <code>Pillow</code>, <code>websocket-client</code>. No CUDA, no ROS,
+          no robot drivers, no real-time kernel, no Docker on your laptop.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Recording that survives you</h3>
+        <p>
+          Data is written on the station, not the client. A crashed policy loop doesn't cost you the
+          episode, and finished datasets come back over the same Ethernet cable.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Teleop devices are sensors</h3>
+        <p>
+          Leader arms, gamepads and keyboards appear in the observation dictionary next to the
+          follower. The protocol treats them identically — mimicry data collection is just a
+          dictionary lookup.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Hardware by plugin</h3>
+        <p>
+          Machines LeRobot doesn't ship are ordinary <code>lerobot_robot_*</code> and
+          <code>lerobot_camera_*</code> packages. Adding an arm is one plugin and one YAML file, not
+          a fork.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Introspection built in</h3>
+        <p>
+          <code>robot.spec()</code> reports the effective control rate, camera FPS and recording
+          state. Lifecycle events — episode boundaries, watchdog trips, rejected actions — stream
+          back as status messages.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-sunk">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Status</h2>
+      <p>
+        This project is built measurement-first, so the same rule applies to this page: an item is
+        only <strong>verified</strong> if it ran on real hardware.
+      </p>
+    </div>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Capability</th>
+            <th scope="col">State</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>SO-101 arm, leader-follower teleop, UVC cameras</td>
+            <td><span class="badge badge-ok">Verified on hardware</span></td>
+          </tr>
+          <tr>
+            <td>ReBot B601-DM bimanual arm and leader</td>
+            <td><span class="badge badge-ok">Verified on hardware</span></td>
+          </tr>
+          <tr>
+            <td>Franka Panda + Robotiq 2F-85 + 2× ZED, DROID interface</td>
+            <td><span class="badge badge-ok">Verified on hardware</span></td>
+          </tr>
+          <tr>
+            <td>Camera streaming — UVC, RealSense, ZED, RGB and depth</td>
+            <td><span class="badge badge-ok">Verified on hardware</span></td>
+          </tr>
+          <tr>
+            <td>Server-side recording and HTTP dataset transfer</td>
+            <td><span class="badge badge-ok">Verified on hardware</span></td>
+          </tr>
+          <tr>
+            <td>π0.5-DROID rollout client</td>
+            <td><span class="badge badge-progress">In progress</span></td>
+          </tr>
+          <tr>
+            <td>Dataset format — full LeRobot v3.0 reader compatibility</td>
+            <td><span class="badge badge-progress">In progress</span></td>
+          </tr>
+          <tr>
+            <td>Client arbitration — one client per station</td>
+            <td><span class="badge badge-planned">Planned</span></td>
+          </tr>
+          <tr>
+            <td>Kinova Gen3</td>
+            <td><span class="badge badge-planned">Planned</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout callout-note">
+      <span class="callout-icon" aria-hidden="true">i</span>
+      <div>
+        <p>
+          <strong>On the dataset format.</strong> Recordings are written on the station as parquet
+          plus MP4 in a LeRobot-shaped layout. Reading them back with LeRobot's own
+          <code>LeRobotDataset</code> is not finished yet — that is the top item on the list.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Design notes</h2>
+      <p>Three choices worth knowing before you adopt it.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h3>Built on LeRobot, not instead of it</h3>
+        <p>
+          r2d2 imports LeRobot's hardware layer rather than reimplementing motor buses and camera
+          drivers, and vendors it torch-free. n-droids adds the parts LeRobot doesn't ship: a
+          station protocol, server-side recording, and teleop devices exposed as sensors.
+        </p>
+      </div>
+      <div class="card">
+        <h3>No ROS 2, no DDS</h3>
+        <p>
+          The station is a setpoint relay. Each arm's own controller keeps its safety reflexes and
+          its real-time loop; the station never replaces them. One WebSocket carries everything.
+        </p>
+      </div>
+      <div class="card">
+        <h3>MDP-shaped, not Gym-shaped</h3>
+        <p>
+          <code>reset()</code> and <code>step()</code> are there and the station owns the cadence,
+          but this is not a <code>gym.Env</code>: there are no spaces, no seeding, and
+          <code>reward</code>/<code>done</code> are dataset metadata rather than RL semantics.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section-sunk">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Start here</h2>
+      <p>Almost everyone only ever touches the client.</p>
+    </div>
+    <div class="hero-actions" style="margin-bottom:0">
+      <a class="btn btn-primary" href="c3po.html">
+        Read the c3po guide <span class="arrow" aria-hidden="true">→</span>
+      </a>
+      <a class="btn btn-secondary" href="r2d2.html">Set up a station</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <h2>This site</h2>
+        <ul>
+          <li><a href="index.html">Overview</a></li>
+          <li><a href="c3po.html">Client · c3po</a></li>
+          <li><a href="r2d2.html">Station · r2d2</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Source</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/r2d2">r2d2 — station server</a></li>
+          <li><a href="https://github.com/kaolab-research/c3po">c3po — client library</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids">n-droids — plans and docs</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Reference</h2>
+        <ul>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan.md">Implementation plan</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/plan/phase_26.md">Phase log</a></li>
+          <li><a href="https://github.com/kaolab-research/n-droids/blob/main/network_setup.md">Network setup</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-note">
+      <p>
+        n-droids is a research project, not a product. Status claims on this site refer to what has
+        actually run on hardware in the lab; everything else is labelled.
+      </p>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/site.js" defer></script>
+</body>
+</html>
